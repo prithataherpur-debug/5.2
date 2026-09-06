@@ -241,3 +241,12 @@ Repo `prithataherpur-debug/pc-2.0` (branch `main`) restored into workspace and b
 - **Monthly portfolio**: `/api/stats/profit-monthly?months=12` → per-month rows (YYYY-MM), browse back up to 60 months ("Show earlier months").
 - **Reports screen (admin)**: added PER-DAY PROFIT list + MONTHLY PROFIT & EXPENSE cards; P&L Excel export now has an Invoices column.
 - Verified: iteration_29 (12/12 backend pytest pass) + UI screenshots.
+
+---
+
+## Feature — Address filter & bulk assign (2026-06)
+
+- Admin "Reassign customers" screen (/app/frontend/app/admin.tsx) now has an **address/area filter** (testID admin-address-filter) that narrows the customer list by address substring, combinable with the employee chips.
+- Added **Select all N** toggle (admin-select-all) to bulk-select the filtered list, plus each row now displays the customer's 📍 address.
+- Selected customers are assigned to a team member via the existing pick-employee sheet → POST /api/admin/reassign.
+- Frontend-only change; verified iteration_30 (5/5 E2E pass).

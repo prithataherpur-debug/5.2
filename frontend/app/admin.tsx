@@ -1,5 +1,5 @@
 import {
-  View, Text, StyleSheet, Pressable, ScrollView, FlatList, Modal, ActivityIndicator,
+  View, Text, StyleSheet, Pressable, ScrollView, FlatList, Modal, ActivityIndicator, TextInput,
 } from "react-native";
 import { useCallback, useEffect, useState } from "react";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -16,6 +16,7 @@ export default function Admin() {
   const { user } = useAuth();
   const [employees, setEmployees] = useState<User[]>([]);
   const [filterEmp, setFilterEmp] = useState<string>("");
+  const [addrQuery, setAddrQuery] = useState("");
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
@@ -34,9 +35,22 @@ export default function Admin() {
 
   useEffect(() => { load(); }, [load]);
 
-  const filtered = filterEmp
-    ? customers.filter((c) => c.assigned_to === filterEmp)
-    : customers;
+  const addr = addrQuery.trim().toLowerCase();
+  const filtered = customers.filter((c) => {
+    if (filterEmp && c.assigned_to !== filterEmp) return false;
+    if (addr && !(c.address || "").toLowerCase().includes(addr)) return false;
+    return true;
+  });
+
+  const allFilteredSelected = filtered.length > 0 && filtered.every((c) => selected.has(c.id));
+  const toggleSelectAll = () => {
+    setSelected((prev) => {
+      const s = new Set(prev);
+      if (allFilteredSelected) filtered.forEach((c) => s.delete(c.id));
+      else filtered.forEach((c) => s.add(c.id));
+      return s;
+    });
+  };
 
   const toggle = (id: string) => {
     setSelected((prev) => {
@@ -102,6 +116,35 @@ export default function Admin() {
         })}
       </ScrollView>
 
+      <View style={styles.searchWrap}>
+        <Ionicons name="location-outline" size={18} color={theme.color.muted} />
+        <TextInput
+          value={addrQuery}
+          onChangeText={setAddrQuery}
+          placeholder="Filter by address / area"
+          placeholderTextColor={theme.color.muted}
+          style={styles.searchInput}
+          testID="admin-address-filter"
+        />
+        {addrQuery ? (
+          <Pressable onPress={() => setAddrQuery("")} hitSlop={8} testID="admin-address-clear">
+            <Ionicons name="close-circle" size={18} color={theme.color.muted} />
+          </Pressable>
+        ) : null}
+      </View>
+
+      {!loading ? (
+        <View style={styles.selectAllBar}>
+          <Pressable onPress={toggleSelectAll} style={styles.selectAllBtn} disabled={filtered.length === 0} testID="admin-select-all">
+            <Ionicons name={allFilteredSelected ? "checkbox" : "square-outline"} size={18} color={filtered.length === 0 ? theme.color.muted : theme.color.brand} />
+            <Text style={[styles.selectAllText, filtered.length === 0 && { color: theme.color.muted }]}>
+              {allFilteredSelected ? "Clear selection" : `Select all ${filtered.length}`}
+            </Text>
+          </Pressable>
+          <Text style={styles.shownText}>{filtered.length} shown</Text>
+        </View>
+      ) : null}
+
       {loading ? (
         <View style={styles.center}><ActivityIndicator color={theme.color.brand} /></View>
       ) : (
@@ -110,6 +153,12 @@ export default function Admin() {
           keyExtractor={(it) => it.id}
           contentContainerStyle={{ padding: theme.space.lg, paddingBottom: 100 }}
           ItemSeparatorComponent={() => <View style={{ height: theme.space.sm }} />}
+          ListEmptyComponent={
+            <View style={styles.empty}>
+              <Ionicons name="location-outline" size={32} color={theme.color.muted} />
+              <Text style={styles.emptyText}>No customers match this filter</Text>
+            </View>
+          }
           renderItem={({ item }) => (
             <Pressable
               onPress={() => toggle(item.id)}
@@ -124,6 +173,7 @@ export default function Admin() {
               <View style={{ flex: 1, marginLeft: theme.space.md }}>
                 <Text style={styles.name}>{item.name}</Text>
                 <Text style={styles.phone}>{item.phone}</Text>
+                {item.address ? <Text style={styles.addrText} numberOfLines={2}>📍 {item.address}</Text> : null}
                 <View style={styles.tagRow}>
                   <View style={styles.tag}><Text style={styles.tagText}>{item.assigned_to || "unassigned"}</Text></View>
                   <View style={[styles.tag, { backgroundColor: STATUS_COLOR[item.status] + "22" }]}>
@@ -198,6 +248,23 @@ const styles = StyleSheet.create({
   reassignBtn: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: theme.color.brand, paddingHorizontal: theme.space.md, height: 36, borderRadius: theme.radius.pill },
   reassignText: { color: theme.color.onBrand, fontWeight: "700", fontSize: 13 },
   chipRow: { paddingHorizontal: theme.space.lg, paddingVertical: theme.space.md, gap: theme.space.sm },
+  searchWrap: {
+    flexDirection: "row", alignItems: "center", gap: 8,
+    marginHorizontal: theme.space.lg, paddingHorizontal: theme.space.md, height: 44,
+    borderRadius: theme.radius.md, borderWidth: 1, borderColor: theme.color.border,
+    backgroundColor: theme.color.surfaceSecondary,
+  },
+  searchInput: { flex: 1, fontSize: theme.font.scale.base, color: theme.color.onSurface, paddingVertical: 0 },
+  selectAllBar: {
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+    paddingHorizontal: theme.space.lg, paddingTop: theme.space.md, paddingBottom: theme.space.xs,
+  },
+  selectAllBtn: { flexDirection: "row", alignItems: "center", gap: 6 },
+  selectAllText: { fontSize: theme.font.scale.sm, fontWeight: "700", color: theme.color.brand },
+  shownText: { fontSize: theme.font.scale.sm, color: theme.color.muted, fontWeight: "600" },
+  addrText: { fontSize: 12, color: theme.color.onSurfaceTertiary, marginTop: 3 },
+  empty: { alignItems: "center", paddingVertical: 60, gap: 10 },
+  emptyText: { fontSize: theme.font.scale.base, color: theme.color.muted, fontWeight: "600" },
   chip: { flexShrink: 0, height: 36, paddingHorizontal: theme.space.md, borderRadius: theme.radius.pill, borderWidth: 1, borderColor: theme.color.border, backgroundColor: theme.color.surfaceSecondary, justifyContent: "center" },
   chipText: { color: theme.color.onSurfaceTertiary, fontSize: theme.font.scale.sm, fontWeight: "600" },
   row: { flexDirection: "row", alignItems: "center", padding: theme.space.md, borderRadius: theme.radius.md, backgroundColor: theme.color.surfaceSecondary, borderWidth: 1, borderColor: theme.color.border },
