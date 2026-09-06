@@ -259,3 +259,12 @@ Repo `prithataherpur-debug/pc-2.0` (branch `main`) restored into workspace and b
 - Main customer search (GET /api/customers?search=) now matches **address** too (name / phone / address); home-tab search placeholder updated to "Search name, phone or address".
 - More → ADMIN entry renamed "Reassign customers" → **"Filter by area & assign"** (location icon); the /admin screen title updated to match. Its address filter + Select all + assign flow unchanged.
 - Verified: curl (address search returns matches) + screenshot (home search by "Salt Lake").
+
+---
+
+## Feature — Saved Areas & area-grouped call list (2026-06)
+
+- Added `areaOf(address)` helper (src/lib/api.ts): derives a locality from free-text address (first segment before comma/dash/slash).
+- **Saved Areas chips (admin "Filter by area & assign")**: auto-built quick-tap chips of distinct areas with counts (sorted by frequency) + "All areas"; tapping sets the address filter in one tap. testIDs `area-chip-<name>` / `area-chip-all`.
+- **Area-grouped daily call list (home tab)**: FlatList → SectionList; customers grouped under area section headers (📍 name + count badge), "No area" sorted last. Home search placeholder now "Search name, phone or address".
+- Verified via screenshots (admin Salt Lake chip → 2 shown; emp5 home shows SALT LAKE section with 2). Lint clean.

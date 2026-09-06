@@ -1,13 +1,13 @@
 import {
   View, Text, StyleSheet, Pressable, ScrollView, FlatList, Modal, ActivityIndicator, TextInput,
 } from "react-native";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 
 import { theme } from "@/src/lib/theme";
-import { api, Customer, User, STATUS_LABEL, STATUS_COLOR } from "@/src/lib/api";
+import { api, Customer, User, STATUS_LABEL, STATUS_COLOR, areaOf } from "@/src/lib/api";
 import { useAuth } from "@/src/lib/auth";
 
 export default function Admin() {
@@ -43,6 +43,15 @@ export default function Admin() {
   });
 
   const allFilteredSelected = filtered.length > 0 && filtered.every((c) => selected.has(c.id));
+
+  const areas = useMemo(() => {
+    const m = new Map<string, number>();
+    customers.forEach((c) => {
+      const a = areaOf(c.address);
+      if (a) m.set(a, (m.get(a) || 0) + 1);
+    });
+    return Array.from(m.entries()).sort((x, y) => y[1] - x[1]).map(([name, count]) => ({ name, count }));
+  }, [customers]);
   const toggleSelectAll = () => {
     setSelected((prev) => {
       const s = new Set(prev);
@@ -132,6 +141,24 @@ export default function Admin() {
           </Pressable>
         ) : null}
       </View>
+
+      {areas.length > 0 ? (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.areaRow}>
+          <Chip label="All areas" active={!addrQuery.trim()} onPress={() => setAddrQuery("")} testID="area-chip-all" />
+          {areas.map((a) => {
+            const active = addrQuery.trim().toLowerCase() === a.name.toLowerCase();
+            return (
+              <Chip
+                key={a.name}
+                label={`${a.name} (${a.count})`}
+                active={active}
+                onPress={() => setAddrQuery(active ? "" : a.name)}
+                testID={`area-chip-${a.name}`}
+              />
+            );
+          })}
+        </ScrollView>
+      ) : null}
 
       {!loading ? (
         <View style={styles.selectAllBar}>
@@ -248,6 +275,7 @@ const styles = StyleSheet.create({
   reassignBtn: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: theme.color.brand, paddingHorizontal: theme.space.md, height: 36, borderRadius: theme.radius.pill },
   reassignText: { color: theme.color.onBrand, fontWeight: "700", fontSize: 13 },
   chipRow: { paddingHorizontal: theme.space.lg, paddingVertical: theme.space.md, gap: theme.space.sm },
+  areaRow: { paddingHorizontal: theme.space.lg, paddingTop: theme.space.md, paddingBottom: theme.space.xs, gap: theme.space.sm },
   searchWrap: {
     flexDirection: "row", alignItems: "center", gap: 8,
     marginHorizontal: theme.space.lg, paddingHorizontal: theme.space.md, height: 44,

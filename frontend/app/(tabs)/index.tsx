@@ -3,7 +3,7 @@ import {
   Text,
   StyleSheet,
   Pressable,
-  FlatList,
+  SectionList,
   Linking,
   Platform,
   RefreshControl,
@@ -29,6 +29,7 @@ import {
   StatsToday,
   STATUS_LABEL,
   STATUS_COLOR,
+  areaOf,
 } from "@/src/lib/api";
 import { useAuth } from "@/src/lib/auth";
 import CustomerEditModal from "@/src/components/CustomerEditModal";
@@ -124,6 +125,22 @@ export default function Home() {
     if (!stats || stats.goal === 0) return 0;
     return Math.min(1, stats.total_calls / stats.goal);
   }, [stats]);
+
+  const sections = useMemo(() => {
+    const m = new Map<string, Customer[]>();
+    customers.forEach((c) => {
+      const a = areaOf(c.address) || "No area";
+      if (!m.has(a)) m.set(a, []);
+      m.get(a)!.push(c);
+    });
+    const arr = Array.from(m.entries()).map(([title, data]) => ({ title, data }));
+    arr.sort((x, y) => {
+      if (x.title === "No area") return 1;
+      if (y.title === "No area") return -1;
+      return x.title.localeCompare(y.title);
+    });
+    return arr;
+  }, [customers]);
 
   const renderItem = ({ item }: { item: Customer }) => (
     <View style={styles.card} testID={`customer-card-${item.id}`}>
@@ -248,12 +265,21 @@ export default function Home() {
           </Text>
         </View>
       ) : (
-        <FlatList
-          data={customers}
+        <SectionList
+          sections={sections}
           keyExtractor={(it) => it.id}
           renderItem={renderItem}
+          renderSectionHeader={({ section }) => (
+            <View style={styles.sectionHeader}>
+              <Ionicons name="location" size={13} color={theme.color.brand} />
+              <Text style={styles.sectionHeaderText} numberOfLines={1}>{section.title}</Text>
+              <Text style={styles.sectionHeaderCount}>{section.data.length}</Text>
+            </View>
+          )}
           contentContainerStyle={{ padding: theme.space.lg, paddingBottom: theme.space.xxxl }}
           ItemSeparatorComponent={() => <View style={{ height: theme.space.sm }} />}
+          renderSectionFooter={() => <View style={{ height: theme.space.md }} />}
+          stickySectionHeadersEnabled={false}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
           testID="customer-list"
         />
@@ -620,6 +646,17 @@ const styles = StyleSheet.create({
   card: {
     flexDirection: "row", alignItems: "center", backgroundColor: theme.color.surfaceSecondary,
     borderRadius: theme.radius.md, padding: theme.space.md, borderWidth: 1, borderColor: theme.color.border,
+  },
+  sectionHeader: {
+    flexDirection: "row", alignItems: "center", gap: 6,
+    paddingVertical: 6, paddingHorizontal: 4, marginBottom: theme.space.sm,
+    backgroundColor: theme.color.surface,
+  },
+  sectionHeaderText: { flex: 1, fontSize: 12, fontWeight: "800", color: theme.color.onSurface, textTransform: "uppercase", letterSpacing: 0.5 },
+  sectionHeaderCount: {
+    fontSize: 11, fontWeight: "800", color: theme.color.brand,
+    backgroundColor: theme.color.brandTertiary, minWidth: 22, textAlign: "center",
+    paddingHorizontal: 6, paddingVertical: 2, borderRadius: theme.radius.pill, overflow: "hidden",
   },
   cardLeft: { flexDirection: "row", alignItems: "center", flex: 1 },
   avatar: { width: 44, height: 44, borderRadius: 22, backgroundColor: theme.color.brandTertiary, alignItems: "center", justifyContent: "center" },

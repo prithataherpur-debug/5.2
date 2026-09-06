@@ -5,6 +5,15 @@ export const API = `${BASE}/api`;
 
 export const TOKEN_KEY = "callflow_token";
 
+// Derive a short "area"/locality from a free-text address.
+// e.g. "Salt Lake, Sector V" -> "Salt Lake". Empty for blank addresses.
+export function areaOf(address?: string | null): string {
+  const a = (address || "").trim();
+  if (!a) return "";
+  return a.split(/[,\-|/]/)[0].trim();
+}
+
+
 export type User = {
   id: string;
   username: string;
