@@ -17,7 +17,7 @@ import requests
 
 BASE = os.environ.get("EXPO_PUBLIC_BACKEND_URL", "").rstrip("/")
 if not BASE:
-    BASE = "https://mass-dialer-2.preview.emergentagent.com"
+    BASE = "https://code-launcher-122.preview.emergentagent.com"
 API = f"{BASE}/api"
 
 ADMIN = ("admin", "Admin@2026")

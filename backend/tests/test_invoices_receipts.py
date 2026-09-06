@@ -5,7 +5,7 @@ import os
 import pytest
 import requests
 
-BASE_URL = os.environ.get("EXPO_PUBLIC_BACKEND_URL", "").rstrip("/") or "https://mass-dialer-2.preview.emergentagent.com"
+BASE_URL = os.environ.get("EXPO_PUBLIC_BACKEND_URL", "").rstrip("/") or "https://code-launcher-122.preview.emergentagent.com"
 API = f"{BASE_URL}/api"
 ADMIN = ("admin", "Admin@2026")
 EMP = ("emp1", "Emp@2026")
