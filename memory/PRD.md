@@ -230,3 +230,14 @@ Repo `prithataherpur-debug/pc-2.0` (branch `main`) restored into workspace and b
 **Known non-blockers**
 - WhatsApp send + push are stubbed (placeholder creds) — dormant until real creds supplied.
 - Cosmetic console warnings (Image resizeMode / pointerEvents deprecations).
+
+---
+
+## Feature — Invoice cost & profit reporting (2026-06)
+
+- **Invoice product cost (per line item)**: invoice items now carry `unit_cost` + `cost_amount`; invoice stores `cost_total` and `profit` (= total − cost_total). Form shows a Cost (₹) box per product, per-line Amount + Profit, and a Total cost + Profit summary.
+- **Combined P&L**: `/api/stats/pnl` now sums revenue & COGS across sales + invoices (legacy source=="invoice" sales excluded to avoid double count); adds `invoice_count`.
+- **Per-day profit**: `/api/stats/profit-daily?days=30` → one row per day (revenue, cogs, expenses, gross/net profit) + totals.
+- **Monthly portfolio**: `/api/stats/profit-monthly?months=12` → per-month rows (YYYY-MM), browse back up to 60 months ("Show earlier months").
+- **Reports screen (admin)**: added PER-DAY PROFIT list + MONTHLY PROFIT & EXPENSE cards; P&L Excel export now has an Invoices column.
+- Verified: iteration_29 (12/12 backend pytest pass) + UI screenshots.

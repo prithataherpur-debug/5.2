@@ -250,8 +250,8 @@ function InvoiceEditor({
   const [payMode, setPayMode] = useState<"cash" | "online" | "mixed">("cash");
   const [cashPart, setCashPart] = useState("");
   const [onlinePart, setOnlinePart] = useState("");
-  const [items, setItems] = useState<{ id: string; name: string; qty: string; rate: string }[]>([
-    { id: "1", name: "", qty: "1", rate: "" },
+  const [items, setItems] = useState<{ id: string; name: string; qty: string; rate: string; cost: string }[]>([
+    { id: "1", name: "", qty: "1", rate: "", cost: "" },
   ]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -267,7 +267,7 @@ function InvoiceEditor({
         mobile: editing.customer_mobile || "", address: editing.customer_address || "",
       });
       setNotes(editing.notes || "");
-      setItems((editing.items || []).map((it, i) => ({ id: `${i}-${Date.now()}`, name: it.name, qty: String(it.qty), rate: String(it.unit_price) })));
+      setItems((editing.items || []).map((it, i) => ({ id: `${i}-${Date.now()}`, name: it.name, qty: String(it.qty), rate: String(it.unit_price), cost: it.unit_cost ? String(it.unit_cost) : "" })));
       setPayMode((editing.payment_mode as any) || "cash");
       setCashPart(editing.payment_mode === "mixed" ? String(editing.cash_amount || "") : "");
       setOnlinePart(editing.payment_mode === "mixed" ? String(editing.online_amount || "") : "");
@@ -276,7 +276,7 @@ function InvoiceEditor({
     }
     setCustomer({ customer_id: null, name: "", mobile: "", address: "" });
     setNotes("");
-    setItems([{ id: String(Date.now()), name: "", qty: "1", rate: "" }]);
+    setItems([{ id: String(Date.now()), name: "", qty: "1", rate: "", cost: "" }]);
     setPayMode("cash"); setCashPart(""); setOnlinePart("");
     setErr("");
     setAdvances([]);
@@ -318,24 +318,36 @@ function InvoiceEditor({
     }, 0);
   }, [items]);
 
+  const costTotal = useMemo(() => {
+    return items.reduce((s, it) => {
+      const q = parseFloat(it.qty || "0") || 0;
+      const c = parseFloat(it.cost || "0") || 0;
+      return s + q * c;
+    }, 0);
+  }, [items]);
+
+  const profit = total - costTotal;
+
   const setItem = (id: string, field: string, val: string) => {
     setItems((prev) => prev.map((it) => (it.id === id ? { ...it, [field]: val } : it)));
   };
 
-  const addRow = () => setItems((prev) => [...prev, { id: String(Date.now() + Math.random()), name: "", qty: "1", rate: "" }]);
+  const addRow = () => setItems((prev) => [...prev, { id: String(Date.now() + Math.random()), name: "", qty: "1", rate: "", cost: "" }]);
   const removeRow = (id: string) => setItems((prev) => (prev.length === 1 ? prev : prev.filter((x) => x.id !== id)));
 
   const submit = async () => {
     if (!customer.name.trim()) { setErr("Customer name is required."); return; }
     if (!customer.mobile.trim() || customer.mobile.replace(/\D/g, "").length < 6) { setErr("Enter a valid mobile number."); return; }
     if (!customer.customer_id && !customer.address.trim()) { setErr("Address is required for a new customer."); return; }
-    const cleanItems: { name: string; qty: number; unit_price: number }[] = [];
+    const cleanItems: { name: string; qty: number; unit_price: number; unit_cost: number }[] = [];
     for (const it of items) {
       const q = parseFloat(it.qty || "0") || 0;
       const r = parseFloat(it.rate || "0") || 0;
+      const c = parseFloat(it.cost || "0") || 0;
       if (!it.name.trim()) continue;
       if (q <= 0) { setErr(`Qty must be > 0 for "${it.name}"`); return; }
-      cleanItems.push({ name: it.name.trim(), qty: q, unit_price: r });
+      if (c < 0) { setErr(`Cost cannot be negative for "${it.name}"`); return; }
+      cleanItems.push({ name: it.name.trim(), qty: q, unit_price: r, unit_cost: c });
     }
     if (cleanItems.length === 0) { setErr("Add at least one product."); return; }
     // Payment split
@@ -457,7 +469,9 @@ function InvoiceEditor({
             {items.map((it, idx) => {
               const q = parseFloat(it.qty || "0") || 0;
               const r = parseFloat(it.rate || "0") || 0;
+              const c = parseFloat(it.cost || "0") || 0;
               const sub = q * r;
+              const lineProfit = q * (r - c);
               return (
                 <View key={it.id} style={styles.itemBlock} testID={`inv-item-${idx}`}>
                   <View style={styles.itemHead}>
@@ -479,8 +493,18 @@ function InvoiceEditor({
                       <TextInput value={it.rate} onChangeText={(v) => setItem(it.id, "rate", v)} keyboardType="decimal-pad" placeholder="0.00" placeholderTextColor={theme.color.muted} style={styles.miniInput} testID={`inv-item-rate-${idx}`} />
                     </View>
                     <View style={{ flex: 1 }}>
-                      <Text style={styles.miniLabel}>Amount</Text>
-                      <View style={styles.subBox}><Text style={styles.subText}>{fmt(sub)}</Text></View>
+                      <Text style={styles.miniLabel}>Cost (₹)</Text>
+                      <TextInput value={it.cost} onChangeText={(v) => setItem(it.id, "cost", v)} keyboardType="decimal-pad" placeholder="0.00" placeholderTextColor={theme.color.muted} style={styles.miniInput} testID={`inv-item-cost-${idx}`} />
+                    </View>
+                  </View>
+                  <View style={styles.itemSummaryRow}>
+                    <View style={styles.itemSummaryCol}>
+                      <Text style={styles.itemSummaryLabel}>Amount</Text>
+                      <Text style={styles.itemAmtText} testID={`inv-item-amount-${idx}`}>{fmt(sub)}</Text>
+                    </View>
+                    <View style={styles.itemSummaryCol}>
+                      <Text style={styles.itemSummaryLabel}>Profit</Text>
+                      <Text style={[styles.itemProfitText, lineProfit < 0 && { color: theme.color.error }]} testID={`inv-item-profit-${idx}`}>{fmt(lineProfit)}</Text>
                     </View>
                   </View>
                 </View>
@@ -490,6 +514,16 @@ function InvoiceEditor({
             <View style={styles.totalBox}>
               <Text style={styles.totalLabel}>Grand total</Text>
               <Text style={styles.totalValue}>{fmt(total)}</Text>
+            </View>
+            <View style={styles.profitRow}>
+              <View style={styles.profitCell}>
+                <Text style={styles.profitLabel}>Total cost</Text>
+                <Text style={styles.profitCostVal} testID="inv-cost-total">{fmt(costTotal)}</Text>
+              </View>
+              <View style={styles.profitCell}>
+                <Text style={styles.profitLabel}>Profit</Text>
+                <Text style={[styles.profitVal, profit < 0 && { color: theme.color.error }]} testID="inv-profit-total">{fmt(profit)}</Text>
+              </View>
             </View>
 
             <Text style={styles.label}>Payment received as</Text>
@@ -634,9 +668,22 @@ const styles = StyleSheet.create({
   miniInput: { height: 40, borderRadius: theme.radius.sm, borderWidth: 1, borderColor: theme.color.border, paddingHorizontal: 8, color: theme.color.onSurface, fontSize: 14, backgroundColor: theme.color.surfaceSecondary, textAlign: "right" },
   subBox: { height: 40, borderRadius: theme.radius.sm, backgroundColor: theme.color.brandTertiary, alignItems: "flex-end", justifyContent: "center", paddingHorizontal: 8 },
   subText: { fontWeight: "800", color: theme.color.brand, fontSize: 14 },
+  itemSummaryRow: { flexDirection: "row", gap: 8, marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: theme.color.border, borderStyle: "dashed" },
+  itemSummaryCol: { flex: 1 },
+  itemSummaryLabel: { fontSize: 10, color: theme.color.muted, fontWeight: "700", marginBottom: 2 },
+  itemAmtText: { fontSize: 15, fontWeight: "800", color: theme.color.onSurface },
+  itemProfitText: { fontSize: 15, fontWeight: "800", color: theme.color.success },
   totalBox: { marginTop: theme.space.md, padding: 12, borderRadius: theme.radius.md, backgroundColor: theme.color.brand, flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   totalLabel: { fontSize: 12, color: "#fff", fontWeight: "700", letterSpacing: 1, textTransform: "uppercase" },
   totalValue: { fontSize: 22, fontWeight: "900", color: "#fff" },
+  profitRow: { flexDirection: "row", gap: 8, marginTop: 8 },
+  profitCell: {
+    flex: 1, padding: 10, borderRadius: theme.radius.md,
+    backgroundColor: theme.color.surface, borderWidth: 1, borderColor: theme.color.border,
+  },
+  profitLabel: { fontSize: 10, color: theme.color.muted, fontWeight: "700", letterSpacing: 0.5, textTransform: "uppercase" },
+  profitCostVal: { fontSize: 17, fontWeight: "800", color: theme.color.onSurface, marginTop: 2 },
+  profitVal: { fontSize: 17, fontWeight: "900", color: theme.color.success, marginTop: 2 },
   err: { color: theme.color.error, marginTop: theme.space.md, fontSize: 13 },
   saveBtn: { marginTop: theme.space.xl, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, backgroundColor: theme.color.brand, height: 52, borderRadius: theme.radius.md },
   saveBtnText: { color: "#fff", fontWeight: "800", fontSize: 16 },

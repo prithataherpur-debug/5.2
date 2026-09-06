@@ -16,7 +16,29 @@ const BACKEND = process.env.EXPO_PUBLIC_BACKEND_URL;
 
 type Pnl = {
   since: string; days: number; revenue: number; cogs: number; gross_profit: number;
-  expenses: number; net_profit: number; sales_count: number; expense_count: number;
+  expenses: number; net_profit: number; sales_count: number; invoice_count: number; expense_count: number;
+};
+
+type ProfitRow = {
+  key: string; sales_revenue: number; invoice_revenue: number;
+  revenue: number; cogs: number; gross_profit: number; expenses: number; net_profit: number;
+  sales_count: number; invoice_count: number; expense_count: number;
+};
+
+type ProfitResp = {
+  rows: ProfitRow[];
+  totals: { revenue: number; cogs: number; gross_profit: number; expenses: number; net_profit: number };
+};
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const monthLabel = (k: string) => {
+  const [y, m] = k.split("-");
+  const mi = parseInt(m, 10) - 1;
+  return `${MONTHS[mi] || m} ${y}`;
+};
+const dayLabel = (k: string) => {
+  const [, m, d] = k.split("-");
+  return `${parseInt(d, 10)} ${MONTHS[parseInt(m, 10) - 1] || ""}`;
 };
 
 async function auth<T>(path: string): Promise<T> {
@@ -31,14 +53,24 @@ export default function Reports() {
   const router = useRouter();
   const { user } = useAuth();
   const [pnl, setPnl] = useState<Pnl | null>(null);
+  const [daily, setDaily] = useState<ProfitResp | null>(null);
+  const [monthly, setMonthly] = useState<ProfitResp | null>(null);
+  const [months, setMonths] = useState(12);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string>("");
 
   const load = useCallback(async () => {
-    try { setPnl(await auth<Pnl>(`/stats/pnl`)); }
+    try {
+      const [p, d, m] = await Promise.all([
+        auth<Pnl>(`/stats/pnl`),
+        auth<ProfitResp>(`/stats/profit-daily?days=30`),
+        auth<ProfitResp>(`/stats/profit-monthly?months=${months}`),
+      ]);
+      setPnl(p); setDaily(d); setMonthly(m);
+    }
     catch (e) { console.log(e); }
     finally { setLoading(false); }
-  }, []);
+  }, [months]);
 
   useEffect(() => { load(); }, [load]);
   useFocusEffect(useCallback(() => { load(); }, [load]));
@@ -118,8 +150,8 @@ export default function Reports() {
                 {fmt(pnl.net_profit)}
               </Text>
               <View style={styles.pnlRow}>
-                <PnlLine label="Revenue" value={fmt(pnl.revenue)} count={`${pnl.sales_count} sales`} />
-                <PnlLine label="COGS" value={"−" + fmt(pnl.cogs)} count="purchase cost" />
+                <PnlLine label="Revenue" value={fmt(pnl.revenue)} count={`${pnl.sales_count} sales · ${pnl.invoice_count} invoices`} />
+                <PnlLine label="COGS" value={"−" + fmt(pnl.cogs)} count="product cost" />
               </View>
               <View style={styles.divider} />
               <View style={styles.pnlRow}>
@@ -127,6 +159,62 @@ export default function Reports() {
                 <PnlLine label="Expenses" value={"−" + fmt(pnl.expenses)} count={`${pnl.expense_count} logged`} />
               </View>
             </View>
+
+            <Text style={styles.section}>PER-DAY PROFIT · LAST 30 DAYS</Text>
+            <View style={styles.group}>
+              {daily && daily.rows.length > 0 ? (
+                daily.rows.map((r) => (
+                  <View key={r.key} style={styles.dayRow} testID={`profit-day-${r.key}`}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.dayDate}>{dayLabel(r.key)}</Text>
+                      <Text style={styles.dayMeta}>
+                        Rev {fmt(r.revenue)} · Cost {fmt(r.cogs)} · Exp {fmt(r.expenses)}
+                      </Text>
+                    </View>
+                    <Text style={[styles.dayNet, r.net_profit < 0 && { color: theme.color.error }]}>
+                      {fmt(r.net_profit)}
+                    </Text>
+                  </View>
+                ))
+              ) : (
+                <View style={styles.emptyRow}><Text style={styles.emptyRowText}>No sales, invoices or expenses yet.</Text></View>
+              )}
+            </View>
+
+            <Text style={styles.section}>MONTHLY PROFIT & EXPENSE</Text>
+            {monthly && monthly.rows.length > 0 ? (
+              <>
+                {monthly.rows.map((r) => (
+                  <View key={r.key} style={styles.monthCard} testID={`profit-month-${r.key}`}>
+                    <View style={styles.monthHead}>
+                      <Text style={styles.monthTitle}>{monthLabel(r.key)}</Text>
+                      <Text style={[styles.monthNet, r.net_profit < 0 && { color: theme.color.error }]}>
+                        {fmt(r.net_profit)}
+                      </Text>
+                    </View>
+                    <Text style={styles.monthNetLabel}>Net profit</Text>
+                    <View style={styles.monthGrid}>
+                      <MiniStat label="Revenue" value={fmt(r.revenue)} />
+                      <MiniStat label="Product cost" value={fmt(r.cogs)} />
+                      <MiniStat label="Expenses" value={fmt(r.expenses)} />
+                    </View>
+                    <Text style={styles.monthSub}>
+                      {r.sales_count} sales · {r.invoice_count} invoices · {r.expense_count} expenses
+                    </Text>
+                  </View>
+                ))}
+                {monthly.rows.length >= months ? (
+                  <Pressable onPress={() => setMonths((m) => m + 12)} style={styles.moreBtn} testID="load-more-months">
+                    <Ionicons name="chevron-down" size={16} color={theme.color.brand} />
+                    <Text style={styles.moreBtnText}>Show earlier months</Text>
+                  </Pressable>
+                ) : null}
+              </>
+            ) : (
+              <View style={styles.group}>
+                <View style={styles.emptyRow}><Text style={styles.emptyRowText}>No monthly data yet.</Text></View>
+              </View>
+            )}
 
             <Text style={styles.section}>DOWNLOAD</Text>
             <View style={styles.group}>
@@ -154,6 +242,15 @@ function PnlLine({ label, value, count }: { label: string; value: string; count:
       <Text style={styles.pnlLineLabel}>{label}</Text>
       <Text style={styles.pnlLineValue}>{value}</Text>
       <Text style={styles.pnlLineCount}>{count}</Text>
+    </View>
+  );
+}
+
+function MiniStat({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={styles.miniStat}>
+      <Text style={styles.miniStatLabel}>{label}</Text>
+      <Text style={styles.miniStatValue}>{value}</Text>
     </View>
   );
 }
@@ -204,6 +301,31 @@ const styles = StyleSheet.create({
   rowLabel: { fontSize: theme.font.scale.lg, fontWeight: "600", color: theme.color.onSurface },
   rowHint: { fontSize: theme.font.scale.sm, color: theme.color.muted, marginTop: 2 },
   backupHint: { fontSize: 11, color: theme.color.muted, marginTop: theme.space.sm, lineHeight: 16 },
+  dayRow: { flexDirection: "row", alignItems: "center", padding: theme.space.md, borderBottomWidth: 1, borderBottomColor: theme.color.border },
+  dayDate: { fontSize: 14, fontWeight: "800", color: theme.color.onSurface },
+  dayMeta: { fontSize: 11, color: theme.color.muted, marginTop: 2 },
+  dayNet: { fontSize: 16, fontWeight: "900", color: theme.color.success, marginLeft: theme.space.md },
+  emptyRow: { padding: theme.space.lg, alignItems: "center" },
+  emptyRowText: { fontSize: 12, color: theme.color.muted },
+  monthCard: {
+    backgroundColor: theme.color.surfaceSecondary, borderRadius: theme.radius.md,
+    borderWidth: 1, borderColor: theme.color.border, padding: theme.space.md, marginBottom: theme.space.sm,
+  },
+  monthHead: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  monthTitle: { fontSize: 16, fontWeight: "800", color: theme.color.onSurface },
+  monthNet: { fontSize: 20, fontWeight: "900", color: theme.color.success },
+  monthNetLabel: { fontSize: 10, color: theme.color.muted, fontWeight: "700", textTransform: "uppercase", letterSpacing: 0.5, textAlign: "right", marginTop: -2 },
+  monthGrid: { flexDirection: "row", gap: 8, marginTop: theme.space.md },
+  miniStat: { flex: 1, backgroundColor: theme.color.surface, borderRadius: theme.radius.sm, borderWidth: 1, borderColor: theme.color.border, padding: 8 },
+  miniStatLabel: { fontSize: 10, color: theme.color.muted, fontWeight: "700" },
+  miniStatValue: { fontSize: 14, fontWeight: "800", color: theme.color.onSurface, marginTop: 2 },
+  monthSub: { fontSize: 11, color: theme.color.muted, marginTop: theme.space.sm, fontWeight: "600" },
+  moreBtn: {
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 4,
+    paddingVertical: theme.space.md, borderRadius: theme.radius.md,
+    borderWidth: 1, borderColor: theme.color.border, borderStyle: "dashed", marginTop: 4,
+  },
+  moreBtnText: { fontSize: 13, fontWeight: "800", color: theme.color.brand },
   deniedTitle: { marginTop: theme.space.md, fontSize: 20, fontWeight: "800", color: theme.color.onSurface },
   backBtn: { marginTop: theme.space.lg, paddingHorizontal: theme.space.xl, paddingVertical: theme.space.md, borderRadius: theme.radius.md, backgroundColor: theme.color.brand },
   backBtnText: { color: theme.color.onBrand, fontWeight: "700" },

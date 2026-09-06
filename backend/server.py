@@ -275,6 +275,7 @@ class InvoiceItemBody(BaseModel):
     name: str
     qty: float = 1
     unit_price: float = 0
+    unit_cost: float = 0
 
 
 class InvoiceCreateBody(BaseModel):
@@ -294,6 +295,8 @@ class InvoiceItem(BaseModel):
     qty: float
     unit_price: float
     amount: float
+    unit_cost: float = 0
+    cost_amount: float = 0
 
 
 class Invoice(BaseModel):
@@ -308,6 +311,8 @@ class Invoice(BaseModel):
     items: List[InvoiceItem]
     subtotal: float
     total: float
+    cost_total: float = 0.0
+    profit: float = 0.0
     cash_amount: float = 0.0
     online_amount: float = 0.0
     payment_mode: str = "cash"  # cash | online | mixed
@@ -3232,15 +3237,22 @@ async def create_invoice(body: InvoiceCreateBody, u=Depends(current_user)):
     # Compute totals
     items: List[dict] = []
     subtotal = 0.0
+    cost_total = 0.0
     for it in body.items:
         qty = float(it.qty or 0)
         rate = float(it.unit_price or 0)
+        cost = float(getattr(it, "unit_cost", 0) or 0)
         if qty <= 0 or rate < 0:
             raise HTTPException(400, "Each item needs qty>0 and rate>=0")
+        if cost < 0:
+            raise HTTPException(400, "Cost must be >= 0")
         amount = round(qty * rate, 2)
-        items.append({"name": it.name.strip() or "Item", "qty": qty, "unit_price": rate, "amount": amount})
+        cost_amount = round(qty * cost, 2)
+        items.append({"name": it.name.strip() or "Item", "qty": qty, "unit_price": rate, "unit_cost": cost, "amount": amount, "cost_amount": cost_amount})
         subtotal += amount
+        cost_total += cost_amount
     total = round(subtotal, 2)
+    cost_total = round(cost_total, 2)
 
     # Auto-link customer (unique by mobile)
     cust = await _get_or_create_customer_by_phone(
@@ -3312,6 +3324,8 @@ async def create_invoice(body: InvoiceCreateBody, u=Depends(current_user)):
         "items": items,
         "subtotal": subtotal,
         "total": total,
+        "cost_total": cost_total,
+        "profit": round(total - cost_total, 2),
         "cash_amount": cash_amt,
         "online_amount": online_amt,
         "payment_mode": pay_mode,
@@ -3444,15 +3458,22 @@ async def replace_invoice(iid: str, body: InvoiceUpdateBody, u=Depends(admin_onl
         raise HTTPException(400, "Add at least one product")
     items: List[dict] = []
     subtotal = 0.0
+    cost_total = 0.0
     for it in body.items:
         qty = float(it.qty or 0)
         rate = float(it.unit_price or 0)
+        cost = float(getattr(it, "unit_cost", 0) or 0)
         if qty <= 0 or rate < 0:
             raise HTTPException(400, "Each item needs qty>0 and rate>=0")
+        if cost < 0:
+            raise HTTPException(400, "Cost must be >= 0")
         amount = round(qty * rate, 2)
-        items.append({"name": it.name.strip() or "Item", "qty": qty, "unit_price": rate, "amount": amount})
+        cost_amount = round(qty * cost, 2)
+        items.append({"name": it.name.strip() or "Item", "qty": qty, "unit_price": rate, "unit_cost": cost, "amount": amount, "cost_amount": cost_amount})
         subtotal += amount
+        cost_total += cost_amount
     total = round(subtotal, 2)
+    cost_total = round(cost_total, 2)
     date_key = (body.date_key or doc.get("date_key") or today_key()).strip()
     if not DATE_RE.match(date_key):
         raise HTTPException(400, "date_key must be YYYY-MM-DD")
@@ -3500,6 +3521,7 @@ async def replace_invoice(iid: str, body: InvoiceUpdateBody, u=Depends(admin_onl
         "customer_mobile": body.customer_mobile.strip(),
         "customer_address": (body.customer_address or "").strip(),
         "items": items, "subtotal": subtotal, "total": total,
+        "cost_total": cost_total, "profit": round(total - cost_total, 2),
         "cash_amount": cash_amt, "online_amount": online_amt, "payment_mode": pay_mode,
         "notes": notes, "pdf_path": pdf_path, "date_key": date_key,
         "updated_at": now_iso(), "updated_by": u["username"],
@@ -4049,12 +4071,63 @@ async def delete_expense(eid: str, _=Depends(admin_only)):
     return {"deleted": True}
 
 
+def _merge_profit_buckets(sales_agg, inv_agg, exp_agg) -> List[dict]:
+    """Merge sales/invoice/expense aggregations keyed by date_key (or month prefix) into
+    unified profit rows: revenue = sales + invoices, gross = revenue − COGS, net = gross − expenses."""
+    m: dict = {}
+    def bucket(k):
+        return m.setdefault(k or "", {
+            "key": k or "", "sales_revenue": 0.0, "invoice_revenue": 0.0,
+            "cogs": 0.0, "expenses": 0.0, "sales_count": 0, "invoice_count": 0, "expense_count": 0,
+        })
+    for r in sales_agg:
+        b = bucket(r["_id"])
+        b["sales_revenue"] += float(r.get("revenue") or 0)
+        b["cogs"] += float(r.get("cogs") or 0)
+        b["sales_count"] += int(r.get("count") or 0)
+    for r in inv_agg:
+        b = bucket(r["_id"])
+        b["invoice_revenue"] += float(r.get("revenue") or 0)
+        b["cogs"] += float(r.get("cogs") or 0)
+        b["invoice_count"] += int(r.get("count") or 0)
+    for r in exp_agg:
+        b = bucket(r["_id"])
+        b["expenses"] += float(r.get("expenses") or 0)
+        b["expense_count"] += int(r.get("count") or 0)
+    out = []
+    for b in m.values():
+        revenue = b["sales_revenue"] + b["invoice_revenue"]
+        gross = revenue - b["cogs"]
+        b["revenue"] = round(revenue, 2)
+        b["cogs"] = round(b["cogs"], 2)
+        b["gross_profit"] = round(gross, 2)
+        b["expenses"] = round(b["expenses"], 2)
+        b["net_profit"] = round(gross - b["expenses"], 2)
+        b["sales_revenue"] = round(b["sales_revenue"], 2)
+        b["invoice_revenue"] = round(b["invoice_revenue"], 2)
+        out.append(b)
+    return out
+
+
+def _profit_totals(rows: List[dict]) -> dict:
+    t = {"revenue": 0.0, "cogs": 0.0, "gross_profit": 0.0, "expenses": 0.0, "net_profit": 0.0,
+         "sales_count": 0, "invoice_count": 0, "expense_count": 0}
+    for r in rows:
+        for k in ("revenue", "cogs", "gross_profit", "expenses", "net_profit"):
+            t[k] += float(r.get(k) or 0)
+        for k in ("sales_count", "invoice_count", "expense_count"):
+            t[k] += int(r.get(k) or 0)
+    for k in ("revenue", "cogs", "gross_profit", "expenses", "net_profit"):
+        t[k] = round(t[k], 2)
+    return t
+
+
 @api_router.get("/stats/pnl")
 async def pnl(_=Depends(admin_only), days: int = 30):
-    """Simple P&L summary over `days` days."""
+    """Combined P&L summary (sales + invoices − COGS − expenses) over `days` days."""
     since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
     sales_agg = await db.sales.aggregate([
-        {"$match": {"date_key": {"$gte": since}}},
+        {"$match": {"date_key": {"$gte": since}, "source": {"$ne": "invoice"}}},
         {"$group": {
             "_id": None,
             "revenue": {"$sum": "$amount"},
@@ -4062,15 +4135,29 @@ async def pnl(_=Depends(admin_only), days: int = 30):
             "count": {"$sum": 1},
         }},
     ]).to_list(1)
+    inv_agg = await db.invoices.aggregate([
+        {"$match": {"date_key": {"$gte": since}}},
+        {"$group": {
+            "_id": None,
+            "revenue": {"$sum": "$total"},
+            "cogs": {"$sum": {"$ifNull": ["$cost_total", 0]}},
+            "count": {"$sum": 1},
+        }},
+    ]).to_list(1)
     exp_agg = await db.expenses.aggregate([
         {"$match": {"date_key": {"$gte": since}}},
         {"$group": {"_id": None, "expenses": {"$sum": "$amount"}, "count": {"$sum": 1}}},
     ]).to_list(1)
-    revenue = sales_agg[0]["revenue"] if sales_agg else 0
-    cogs = sales_agg[0]["cogs"] if sales_agg else 0
+    sales_rev = sales_agg[0]["revenue"] if sales_agg else 0
+    sales_cogs = sales_agg[0]["cogs"] if sales_agg else 0
     sales_count = sales_agg[0]["count"] if sales_agg else 0
+    inv_rev = inv_agg[0]["revenue"] if inv_agg else 0
+    inv_cogs = inv_agg[0]["cogs"] if inv_agg else 0
+    inv_count = inv_agg[0]["count"] if inv_agg else 0
     expenses = exp_agg[0]["expenses"] if exp_agg else 0
     exp_count = exp_agg[0]["count"] if exp_agg else 0
+    revenue = sales_rev + inv_rev
+    cogs = sales_cogs + inv_cogs
     gross_profit = revenue - cogs
     net_profit = gross_profit - expenses
     return {
@@ -4082,8 +4169,62 @@ async def pnl(_=Depends(admin_only), days: int = 30):
         "expenses": expenses,
         "net_profit": net_profit,
         "sales_count": sales_count,
+        "invoice_count": inv_count,
         "expense_count": exp_count,
     }
+
+
+@api_router.get("/stats/profit-daily")
+async def profit_daily(_=Depends(admin_only), days: int = 30):
+    """Per-day profit (sales + invoices − COGS − expenses), newest first."""
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+    sales_agg = await db.sales.aggregate([
+        {"$match": {"date_key": {"$gte": since}, "source": {"$ne": "invoice"}}},
+        {"$group": {"_id": "$date_key",
+                    "revenue": {"$sum": "$amount"},
+                    "cogs": {"$sum": {"$ifNull": ["$purchase_amount", 0]}},
+                    "count": {"$sum": 1}}},
+    ]).to_list(2000)
+    inv_agg = await db.invoices.aggregate([
+        {"$match": {"date_key": {"$gte": since}}},
+        {"$group": {"_id": "$date_key",
+                    "revenue": {"$sum": "$total"},
+                    "cogs": {"$sum": {"$ifNull": ["$cost_total", 0]}},
+                    "count": {"$sum": 1}}},
+    ]).to_list(2000)
+    exp_agg = await db.expenses.aggregate([
+        {"$match": {"date_key": {"$gte": since}}},
+        {"$group": {"_id": "$date_key", "expenses": {"$sum": "$amount"}, "count": {"$sum": 1}}},
+    ]).to_list(2000)
+    rows = [r for r in _merge_profit_buckets(sales_agg, inv_agg, exp_agg) if r["key"]]
+    rows.sort(key=lambda r: r["key"], reverse=True)
+    return {"since": since, "days": days, "rows": rows, "totals": _profit_totals(rows)}
+
+
+@api_router.get("/stats/profit-monthly")
+async def profit_monthly(_=Depends(admin_only), months: int = 12):
+    """Per-month portfolio of profit & expense (sales + invoices). Browse back up to 60 months."""
+    months = max(1, min(months, 60))
+    sales_agg = await db.sales.aggregate([
+        {"$match": {"source": {"$ne": "invoice"}}},
+        {"$group": {"_id": {"$substrBytes": ["$date_key", 0, 7]},
+                    "revenue": {"$sum": "$amount"},
+                    "cogs": {"$sum": {"$ifNull": ["$purchase_amount", 0]}},
+                    "count": {"$sum": 1}}},
+    ]).to_list(2000)
+    inv_agg = await db.invoices.aggregate([
+        {"$group": {"_id": {"$substrBytes": ["$date_key", 0, 7]},
+                    "revenue": {"$sum": "$total"},
+                    "cogs": {"$sum": {"$ifNull": ["$cost_total", 0]}},
+                    "count": {"$sum": 1}}},
+    ]).to_list(2000)
+    exp_agg = await db.expenses.aggregate([
+        {"$group": {"_id": {"$substrBytes": ["$date_key", 0, 7]}, "expenses": {"$sum": "$amount"}, "count": {"$sum": 1}}},
+    ]).to_list(2000)
+    rows = [r for r in _merge_profit_buckets(sales_agg, inv_agg, exp_agg) if len(r["key"]) == 7]
+    rows.sort(key=lambda r: r["key"], reverse=True)
+    rows = rows[:months]
+    return {"months": months, "rows": rows, "totals": _profit_totals(rows)}
 
 
 # ---------- Excel reports (admin only) ----------
@@ -4198,48 +4339,46 @@ async def report_pnl(token: Optional[str] = Query(None),
                      days: int = 30):
     _check_report_auth("pnl", token, cred)
     since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
-    # per-day rollup: revenue, cogs, expenses, net
+    # per-day rollup: revenue (sales + invoices), cogs, expenses, net
     sales_agg = await db.sales.aggregate([
-        {"$match": {"date_key": {"$gte": since}}},
+        {"$match": {"date_key": {"$gte": since}, "source": {"$ne": "invoice"}}},
         {"$group": {
             "_id": "$date_key",
             "revenue": {"$sum": "$amount"},
             "cogs": {"$sum": {"$ifNull": ["$purchase_amount", 0]}},
             "count": {"$sum": 1},
         }},
-    ]).to_list(500)
+    ]).to_list(2000)
+    inv_agg = await db.invoices.aggregate([
+        {"$match": {"date_key": {"$gte": since}}},
+        {"$group": {
+            "_id": "$date_key",
+            "revenue": {"$sum": "$total"},
+            "cogs": {"$sum": {"$ifNull": ["$cost_total", 0]}},
+            "count": {"$sum": 1},
+        }},
+    ]).to_list(2000)
     exp_agg = await db.expenses.aggregate([
         {"$match": {"date_key": {"$gte": since}}},
         {"$group": {"_id": "$date_key", "expenses": {"$sum": "$amount"}, "count": {"$sum": 1}}},
-    ]).to_list(500)
-    day_map: dict = {}
-    for r in sales_agg:
-        day_map.setdefault(r["_id"], {})["revenue"] = r["revenue"]
-        day_map[r["_id"]]["cogs"] = r["cogs"]
-        day_map[r["_id"]]["sales_count"] = r["count"]
-    for r in exp_agg:
-        day_map.setdefault(r["_id"], {})["expenses"] = r["expenses"]
-        day_map[r["_id"]]["expense_count"] = r["count"]
+    ]).to_list(2000)
+    rows = [r for r in _merge_profit_buckets(sales_agg, inv_agg, exp_agg) if r["key"]]
+    rows.sort(key=lambda r: r["key"])
 
     wb = Workbook()
     ws = wb.active
     ws.title = "P&L"
-    ws.append(["Date", "Sales", "Revenue", "COGS", "Gross profit", "Expenses", "Net profit"])
+    ws.append(["Date", "Sales", "Invoices", "Revenue", "COGS", "Gross profit", "Expenses", "Net profit"])
     tot_rev = tot_cogs = tot_exp = 0.0
-    for d in sorted(day_map.keys()):
-        rev = float(day_map[d].get("revenue", 0))
-        cogs = float(day_map[d].get("cogs", 0))
-        exp = float(day_map[d].get("expenses", 0))
-        gross = rev - cogs
-        net = gross - exp
-        ws.append([d, day_map[d].get("sales_count", 0), rev, cogs, gross, exp, net])
-        tot_rev += rev; tot_cogs += cogs; tot_exp += exp
+    for r in rows:
+        ws.append([r["key"], r["sales_count"], r["invoice_count"], r["revenue"], r["cogs"], r["gross_profit"], r["expenses"], r["net_profit"]])
+        tot_rev += r["revenue"]; tot_cogs += r["cogs"]; tot_exp += r["expenses"]
     ws.append([])
-    ws.append(["TOTAL", "", tot_rev, tot_cogs, tot_rev - tot_cogs, tot_exp, tot_rev - tot_cogs - tot_exp])
-    for col in ("C", "D", "E", "F", "G"):
+    ws.append(["TOTAL", "", "", tot_rev, tot_cogs, tot_rev - tot_cogs, tot_exp, tot_rev - tot_cogs - tot_exp])
+    for col in ("D", "E", "F", "G", "H"):
         for cell in ws[col][1:]:
             cell.number_format = "#,##0.00"
-    for col_letter, width in zip("ABCDEFG", (12, 8, 14, 14, 14, 14, 14)):
+    for col_letter, width in zip("ABCDEFGH", (12, 8, 9, 14, 14, 14, 14, 14)):
         ws.column_dimensions[col_letter].width = width
     return _xlsx_response(wb, "pnl.xlsx")
 

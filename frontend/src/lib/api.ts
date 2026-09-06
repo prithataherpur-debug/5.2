@@ -143,7 +143,7 @@ export type CollectionEntry = {
 
 export type DailySaleEntry = CollectionEntry;
 
-export type InvoiceItem = { name: string; qty: number; unit_price: number; amount: number };
+export type InvoiceItem = { name: string; qty: number; unit_price: number; amount: number; unit_cost?: number; cost_amount?: number };
 export type Invoice = {
   id: string;
   invoice_no: string;
@@ -156,6 +156,8 @@ export type Invoice = {
   items: InvoiceItem[];
   subtotal: number;
   total: number;
+  cost_total?: number;
+  profit?: number;
   cash_amount?: number;
   online_amount?: number;
   payment_mode?: "cash" | "online" | "mixed";
@@ -467,7 +469,7 @@ export const api = {
   },
   createInvoice: (body: {
     customer_name: string; customer_mobile: string; customer_address?: string;
-    items: { name: string; qty: number; unit_price: number }[];
+    items: { name: string; qty: number; unit_price: number; unit_cost?: number }[];
     notes?: string; customer_id?: string;
     attach_receipt_ids?: string[];
     cash_amount?: number; online_amount?: number;
@@ -475,7 +477,7 @@ export const api = {
   getInvoice: (id: string) => req<Invoice>(`/invoices/${id}`),
   replaceInvoice: (id: string, body: {
     customer_name: string; customer_mobile: string; customer_address?: string;
-    items: { name: string; qty: number; unit_price: number }[];
+    items: { name: string; qty: number; unit_price: number; unit_cost?: number }[];
     notes?: string; customer_id?: string; cash_amount?: number; online_amount?: number; date_key?: string;
   }) =>
     req<Invoice>(`/invoices/${id}`, { method: "PUT", body: JSON.stringify(body) }),
