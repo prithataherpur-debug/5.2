@@ -268,3 +268,12 @@ Repo `prithataherpur-debug/pc-2.0` (branch `main`) restored into workspace and b
 - **Saved Areas chips (admin "Filter by area & assign")**: auto-built quick-tap chips of distinct areas with counts (sorted by frequency) + "All areas"; tapping sets the address filter in one tap. testIDs `area-chip-<name>` / `area-chip-all`.
 - **Area-grouped daily call list (home tab)**: FlatList → SectionList; customers grouped under area section headers (📍 name + count badge), "No area" sorted last. Home search placeholder now "Search name, phone or address".
 - Verified via screenshots (admin Salt Lake chip → 2 shown; emp5 home shows SALT LAKE section with 2). Lint clean.
+
+---
+
+## Feature — Area collapse, Unassigned filter, Area progress (2026-06)
+
+- **Area collapse (home call list)**: tapping an area section header toggles collapse/expand (chevron up/down); collapsed state in local Set. testID `area-header-<area>`.
+- **Area progress (home)**: each area header shows "{done}/{total} called" + a thin progress bar (done = customers whose status != pending).
+- **Unassigned view (admin "Filter by area & assign")**: added "Unassigned (N)" chip (sentinel filterEmp="__unassigned__", testID `filter-unassigned`) showing customers with no owner so none are missed; combines with area filter and can be bulk-assigned.
+- Frontend-only. Verified via screenshots (emp5 home progress + collapse; admin Unassigned → 1 shown "Unowned Lead"). Lint clean.

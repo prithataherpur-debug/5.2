@@ -10,6 +10,8 @@ import { theme } from "@/src/lib/theme";
 import { api, Customer, User, STATUS_LABEL, STATUS_COLOR, areaOf } from "@/src/lib/api";
 import { useAuth } from "@/src/lib/auth";
 
+const UNASSIGNED = "__unassigned__";
+
 export default function Admin() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -37,7 +39,8 @@ export default function Admin() {
 
   const addr = addrQuery.trim().toLowerCase();
   const filtered = customers.filter((c) => {
-    if (filterEmp && c.assigned_to !== filterEmp) return false;
+    if (filterEmp === UNASSIGNED) { if (c.assigned_to) return false; }
+    else if (filterEmp && c.assigned_to !== filterEmp) return false;
     if (addr && !(c.address || "").toLowerCase().includes(addr)) return false;
     return true;
   });
@@ -52,6 +55,8 @@ export default function Admin() {
     });
     return Array.from(m.entries()).sort((x, y) => y[1] - x[1]).map(([name, count]) => ({ name, count }));
   }, [customers]);
+
+  const unassignedCount = customers.filter((c) => !c.assigned_to).length;
   const toggleSelectAll = () => {
     setSelected((prev) => {
       const s = new Set(prev);
@@ -111,6 +116,12 @@ export default function Admin() {
 
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
         <Chip label={`All (${customers.length})`} active={filterEmp === ""} onPress={() => setFilterEmp("")} />
+        <Chip
+          label={`Unassigned (${unassignedCount})`}
+          active={filterEmp === UNASSIGNED}
+          onPress={() => setFilterEmp(filterEmp === UNASSIGNED ? "" : UNASSIGNED)}
+          testID="filter-unassigned"
+        />
         {employees.map((e) => {
           const count = customers.filter((c) => c.assigned_to === e.username).length;
           return (

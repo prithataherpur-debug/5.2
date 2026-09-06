@@ -66,6 +66,7 @@ export default function Home() {
   const [statusFor, setStatusFor] = useState<Customer | null>(null);
   const [editCustomer, setEditCustomer] = useState<Customer | null>(null);
   const [addOpen, setAddOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 
   const load = useCallback(async () => {
     try {
@@ -133,7 +134,10 @@ export default function Home() {
       if (!m.has(a)) m.set(a, []);
       m.get(a)!.push(c);
     });
-    const arr = Array.from(m.entries()).map(([title, data]) => ({ title, data }));
+    const arr = Array.from(m.entries()).map(([title, data]) => {
+      const pending = data.filter((c) => c.status === "pending").length;
+      return { title, data, total: data.length, pending, done: data.length - pending };
+    });
     arr.sort((x, y) => {
       if (x.title === "No area") return 1;
       if (y.title === "No area") return -1;
@@ -141,6 +145,19 @@ export default function Home() {
     });
     return arr;
   }, [customers]);
+
+  const displaySections = useMemo(
+    () => sections.map((s) => ({ ...s, data: collapsed.has(s.title) ? [] : s.data })),
+    [sections, collapsed],
+  );
+
+  const toggleArea = (title: string) => {
+    setCollapsed((prev) => {
+      const s = new Set(prev);
+      if (s.has(title)) s.delete(title); else s.add(title);
+      return s;
+    });
+  };
 
   const renderItem = ({ item }: { item: Customer }) => (
     <View style={styles.card} testID={`customer-card-${item.id}`}>
@@ -266,16 +283,32 @@ export default function Home() {
         </View>
       ) : (
         <SectionList
-          sections={sections}
+          sections={displaySections}
           keyExtractor={(it) => it.id}
           renderItem={renderItem}
-          renderSectionHeader={({ section }) => (
-            <View style={styles.sectionHeader}>
-              <Ionicons name="location" size={13} color={theme.color.brand} />
-              <Text style={styles.sectionHeaderText} numberOfLines={1}>{section.title}</Text>
-              <Text style={styles.sectionHeaderCount}>{section.data.length}</Text>
-            </View>
-          )}
+          renderSectionHeader={({ section }) => {
+            const isCollapsed = collapsed.has(section.title);
+            const pct = section.total ? section.done / section.total : 0;
+            return (
+              <Pressable
+                onPress={() => toggleArea(section.title)}
+                style={styles.sectionHeader}
+                testID={`area-header-${section.title}`}
+              >
+                <View style={styles.sectionHeaderTop}>
+                  <Ionicons name="location" size={13} color={theme.color.brand} />
+                  <Text style={styles.sectionHeaderText} numberOfLines={1}>{section.title}</Text>
+                  <Text style={styles.areaProgressText}>
+                    {section.done}/{section.total} called
+                  </Text>
+                  <Ionicons name={isCollapsed ? "chevron-down" : "chevron-up"} size={16} color={theme.color.muted} />
+                </View>
+                <View style={styles.areaBarTrack}>
+                  <View style={[styles.areaBarFill, { width: `${pct * 100}%` }]} />
+                </View>
+              </Pressable>
+            );
+          }}
           contentContainerStyle={{ padding: theme.space.lg, paddingBottom: theme.space.xxxl }}
           ItemSeparatorComponent={() => <View style={{ height: theme.space.sm }} />}
           renderSectionFooter={() => <View style={{ height: theme.space.md }} />}
@@ -648,16 +681,14 @@ const styles = StyleSheet.create({
     borderRadius: theme.radius.md, padding: theme.space.md, borderWidth: 1, borderColor: theme.color.border,
   },
   sectionHeader: {
-    flexDirection: "row", alignItems: "center", gap: 6,
     paddingVertical: 6, paddingHorizontal: 4, marginBottom: theme.space.sm,
     backgroundColor: theme.color.surface,
   },
+  sectionHeaderTop: { flexDirection: "row", alignItems: "center", gap: 6 },
   sectionHeaderText: { flex: 1, fontSize: 12, fontWeight: "800", color: theme.color.onSurface, textTransform: "uppercase", letterSpacing: 0.5 },
-  sectionHeaderCount: {
-    fontSize: 11, fontWeight: "800", color: theme.color.brand,
-    backgroundColor: theme.color.brandTertiary, minWidth: 22, textAlign: "center",
-    paddingHorizontal: 6, paddingVertical: 2, borderRadius: theme.radius.pill, overflow: "hidden",
-  },
+  areaProgressText: { fontSize: 11, fontWeight: "700", color: theme.color.muted },
+  areaBarTrack: { height: 4, borderRadius: theme.radius.pill, backgroundColor: theme.color.surfaceTertiary, marginTop: 6, overflow: "hidden" },
+  areaBarFill: { height: "100%", backgroundColor: theme.color.brand, borderRadius: theme.radius.pill },
   cardLeft: { flexDirection: "row", alignItems: "center", flex: 1 },
   avatar: { width: 44, height: 44, borderRadius: 22, backgroundColor: theme.color.brandTertiary, alignItems: "center", justifyContent: "center" },
   avatarText: { color: theme.color.brand, fontWeight: "800", fontSize: 18 },
