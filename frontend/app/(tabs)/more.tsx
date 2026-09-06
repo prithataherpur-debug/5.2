@@ -39,6 +39,7 @@ export default function More() {
           <Row icon="book-outline" label="Daybook" onPress={() => router.push("/daybook")} testID="row-daybook" />
           <Row icon="calendar-outline" label="Attendance history" onPress={() => router.push("/attendance")} testID="row-attendance" />
           <Row icon="time-outline" label="Call history" onPress={() => router.push("/history")} testID="row-history" />
+          <Row icon="bar-chart-outline" label="My sales & call report" onPress={() => router.push("/my-report")} testID="row-my-report" />
           <Row
             icon="wallet-outline"
             label={isCollector ? "Due collection (assigned to you)" : "Due collection"}

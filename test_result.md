@@ -102,9 +102,22 @@
 # Testing Data - Main Agent and testing sub agent both should log testing data below this section
 #====================================================================================================
 
-user_problem_statement: "Backend-only validation of 3 new features: (1) /health probe route at root, (2) /api/customers/search by name or mobile, (3) reference_no propagated on linked_receipts across sales/collections/invoices/daybook. Plus regressions on /customers/lookup, /customers/{id}/ledger, and pdf_token."
+user_problem_statement: "Feature: Each employee (and admin) can view their OWN sales and call report, aggregated by week and by month. New endpoint GET /api/stats/my-report + new screen my-report.tsx. Also restored missing backend/.env and frontend/.env files (were gitignored / not restored from GitHub)."
 
 backend:
+  - task: "GET /api/stats/my-report — own weekly & monthly sales + call report"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        - working: true
+          agent: "main"
+          comment: "New endpoint returns logged-in user's OWN data only (filtered by user==username). Buckets: weekly (last 8 weeks, Monday-based) and monthly (last 6 calendar months). Each bucket has total calls, per-status breakdown (VALID_STATUS), sales_count, revenue. Verified locally via curl with seeded emp1 records: weekly and monthly buckets aggregate correctly (this-week 3 calls/1 sale, prior-week, last-month). Test data cleaned up after. Params weeks (max 52) and months (max 24) clamped."
+
+backend_regression:
   - task: "Deployment health probe (GET /health at root, no /api prefix)"
     implemented: true
     working: true
@@ -166,17 +179,17 @@ backend:
           comment: "Ledger endpoint returns 200 with expected structure. Route still resolves after adding /customers/search sibling route."
 
 frontend:
-  - task: "N/A this run"
+  - task: "My report screen — weekly/monthly toggle, sales + call breakdown"
     implemented: true
     working: "NA"
-    file: "-"
+    file: "/app/frontend/app/my-report.tsx"
     stuck_count: 0
-    priority: "low"
+    priority: "high"
     needs_retesting: false
     status_history:
         - working: "NA"
-          agent: "testing"
-          comment: "Backend-only iteration; no frontend testing performed."
+          agent: "main"
+          comment: "New screen with Weekly/Monthly segmented toggle, summary strip (calls/sales/revenue totals) and per-period cards showing calls, sales_count, revenue and status breakdown pills. Added row 'My sales & call report' in More tab (visible to all) and registered route in _layout.tsx. Not yet UI-tested."
 
 metadata:
   created_by: "testing_agent"
@@ -191,5 +204,5 @@ test_plan:
   test_priority: "high_first"
 
 agent_communication:
-    - agent: "testing"
-      message: "Iteration 23 backend-only: 19/19 tests pass in /app/backend/tests/test_iteration23_search_health_refs.py (JUnit at /app/test_reports/pytest/iteration23.xml). All 3 new features working. /health note: only accessible on backend port 8001 (K8s probes hit pod directly). server.py is 3468 lines — recommend future split into modules, non-blocking."
+    - agent: "main"
+      message: "Implemented 'My report' feature: GET /api/stats/my-report (own weekly/monthly sales+calls) and frontend screen my-report.tsx with weekly/monthly toggle, accessible via More tab to all users. Backend verified locally with seeded+cleaned test data. Also restored missing backend/.env (MONGO_URL/DB_NAME=pritha_cabinet/EMERGENT_LLM_KEY) and frontend/.env (EXPO_PUBLIC_BACKEND_URL) — they were gitignored and not restored from GitHub, which had left backend crashing on startup."

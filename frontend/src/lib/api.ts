@@ -625,6 +625,27 @@ export const api = {
     req<{ date: string; count: number; revenue: number; profit?: number; by_user: any[] }>(
       `/stats/sales-today${scope ? `?scope=${scope}` : ""}`,
     ),
+
+  myReport: (weeks = 8, months = 6) =>
+    req<MyReport>(`/stats/my-report?weeks=${weeks}&months=${months}`),
+};
+
+export type ReportBucket = {
+  key: string;
+  label: string;
+  start?: string;
+  end?: string;
+  calls: number;
+  breakdown: Record<string, number>;
+  sales_count: number;
+  revenue: number;
+};
+
+export type MyReport = {
+  username: string;
+  display_name: string;
+  weekly: ReportBucket[];
+  monthly: ReportBucket[];
 };
 
 export const STATUS_LABEL: Record<string, string> = {

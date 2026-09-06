@@ -1606,6 +1606,126 @@ async def stats_history(u=Depends(current_user), days: int = 30):
     return {"history": ordered}
 
 
+_MONTHS_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+
+@api_router.get("/stats/my-report")
+async def stats_my_report(u=Depends(current_user), weeks: int = 8, months: int = 6):
+    """The logged-in user's OWN sales + call activity, bucketed by week and by month.
+
+    - weekly: last N weeks (Monday-based), most-recent first
+    - monthly: last N calendar months, most-recent first
+    Each bucket has: total calls, per-status breakdown, sales count, revenue.
+    """
+    username = u["username"]
+    weeks = max(1, min(int(weeks or 8), 52))
+    months = max(1, min(int(months or 6), 24))
+
+    today = datetime.now(timezone.utc).date()
+
+    # ----- Weekly window (Monday-based) -----
+    this_monday = today - timedelta(days=today.weekday())
+    week_start = this_monday - timedelta(weeks=weeks - 1)
+    week_start_key = week_start.strftime("%Y-%m-%d")
+
+    # ----- Monthly window -----
+    start_month_ordinal = (today.year * 12 + (today.month - 1)) - (months - 1)
+    start_y, start_m0 = divmod(start_month_ordinal, 12)
+    month_start = datetime(start_y, start_m0 + 1, 1, tzinfo=timezone.utc).date()
+    month_start_key = month_start.strftime("%Y-%m-%d")
+
+    overall_start_key = min(week_start_key, month_start_key)
+
+    call_docs = await db.call_logs.find(
+        {"user": username, "date_key": {"$gte": overall_start_key}},
+        {"_id": 0, "date_key": 1, "status": 1},
+    ).to_list(100000)
+    sale_docs = await db.sales.find(
+        {"user": username, "date_key": {"$gte": overall_start_key}},
+        {"_id": 0, "date_key": 1, "amount": 1},
+    ).to_list(100000)
+
+    def parse_key(k):
+        try:
+            return datetime.strptime(k, "%Y-%m-%d").date()
+        except Exception:
+            return None
+
+    def new_bucket(extra):
+        b = {"calls": 0, "breakdown": {s: 0 for s in VALID_STATUS}, "sales_count": 0, "revenue": 0.0}
+        b.update(extra)
+        return b
+
+    # Build weekly buckets (oldest first, reversed at the end)
+    weekly = []
+    week_index = {}
+    for i in range(weeks):
+        wstart = week_start + timedelta(weeks=i)
+        wend = wstart + timedelta(days=6)
+        key = wstart.strftime("%Y-%m-%d")
+        label = f"{wstart.day} {_MONTHS_ABBR[wstart.month - 1]} – {wend.day} {_MONTHS_ABBR[wend.month - 1]}"
+        bucket = new_bucket({"key": key, "label": label, "start": key, "end": wend.strftime("%Y-%m-%d")})
+        weekly.append(bucket)
+        week_index[key] = bucket
+
+    # Build monthly buckets
+    monthly = []
+    month_index = {}
+    for i in range(months):
+        ordinal = start_month_ordinal + i
+        yy, mm0 = divmod(ordinal, 12)
+        key = f"{yy:04d}-{mm0 + 1:02d}"
+        label = f"{_MONTHS_ABBR[mm0]} {yy}"
+        bucket = new_bucket({"key": key, "label": label})
+        monthly.append(bucket)
+        month_index[key] = bucket
+
+    def week_key_for(d):
+        monday = d - timedelta(days=d.weekday())
+        return monday.strftime("%Y-%m-%d")
+
+    for doc in call_docs:
+        d = parse_key(doc.get("date_key"))
+        if not d:
+            continue
+        status = doc.get("status")
+        wb = week_index.get(week_key_for(d))
+        if wb is not None:
+            wb["calls"] += 1
+            if status in wb["breakdown"]:
+                wb["breakdown"][status] += 1
+        mb = month_index.get(f"{d.year:04d}-{d.month:02d}")
+        if mb is not None:
+            mb["calls"] += 1
+            if status in mb["breakdown"]:
+                mb["breakdown"][status] += 1
+
+    for doc in sale_docs:
+        d = parse_key(doc.get("date_key"))
+        if not d:
+            continue
+        amt = float(doc.get("amount") or 0)
+        wb = week_index.get(week_key_for(d))
+        if wb is not None:
+            wb["sales_count"] += 1
+            wb["revenue"] += amt
+        mb = month_index.get(f"{d.year:04d}-{d.month:02d}")
+        if mb is not None:
+            mb["sales_count"] += 1
+            mb["revenue"] += amt
+
+    weekly.reverse()
+    monthly.reverse()
+
+    return {
+        "username": username,
+        "display_name": u.get("display_name", username),
+        "weekly": weekly,
+        "monthly": monthly,
+    }
+
+
+
 @api_router.get("/stats/leaderboard")
 async def stats_leaderboard(u=Depends(current_user)):
     """Today's ranking of every employee by total calls made."""

@@ -66,6 +66,7 @@ function Gate() {
       <Stack.Screen name="settings" options={{ presentation: "card" }} />
       <Stack.Screen name="admin" options={{ presentation: "card" }} />
       <Stack.Screen name="history" options={{ presentation: "card" }} />
+      <Stack.Screen name="my-report" options={{ presentation: "card" }} />
       <Stack.Screen name="attendance" options={{ presentation: "card" }} />
       <Stack.Screen name="sales" options={{ presentation: "card" }} />
       <Stack.Screen name="expenses" options={{ presentation: "card" }} />
