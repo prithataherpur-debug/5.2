@@ -250,3 +250,12 @@ Repo `prithataherpur-debug/pc-2.0` (branch `main`) restored into workspace and b
 - Added **Select all N** toggle (admin-select-all) to bulk-select the filtered list, plus each row now displays the customer's 📍 address.
 - Selected customers are assigned to a team member via the existing pick-employee sheet → POST /api/admin/reassign.
 - Frontend-only change; verified iteration_30 (5/5 E2E pass).
+
+---
+
+## Fix — address search discoverability (2026-06)
+
+- User couldn't find the address filter (it was only on the admin bulk-assign screen).
+- Main customer search (GET /api/customers?search=) now matches **address** too (name / phone / address); home-tab search placeholder updated to "Search name, phone or address".
+- More → ADMIN entry renamed "Reassign customers" → **"Filter by area & assign"** (location icon); the /admin screen title updated to match. Its address filter + Select all + assign flow unchanged.
+- Verified: curl (address search returns matches) + screenshot (home search by "Salt Lake").

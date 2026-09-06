@@ -199,7 +199,7 @@ export default function Home() {
           <Ionicons name="search" size={16} color={theme.color.muted} style={{ marginRight: 6 }} />
           <TextInput
             style={styles.searchInput}
-            placeholder="Search name or phone"
+            placeholder="Search name, phone or address"
             placeholderTextColor={theme.color.muted}
             value={search}
             onChangeText={setSearch}

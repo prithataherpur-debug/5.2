@@ -1368,6 +1368,7 @@ async def list_customers(
         query["$or"] = [
             {"name": {"$regex": re.escape(search), "$options": "i"}},
             {"phone": {"$regex": re.escape(search), "$options": "i"}},
+            {"address": {"$regex": re.escape(search), "$options": "i"}},
         ]
     docs = await db.customers.find(query, {"_id": 0}).sort("created_at", 1).to_list(5000)
     return [customer_from_doc(d) for d in docs]

@@ -52,7 +52,7 @@ export default function More() {
             <Text style={styles.section}>ADMIN</Text>
             <View style={styles.group}>
               <Row icon="settings-outline" label="Settings & import" onPress={() => router.push("/settings")} testID="row-settings" />
-              <Row icon="people-outline" label="Reassign customers" onPress={() => router.push("/admin")} testID="row-admin" />
+              <Row icon="location-outline" label="Filter by area & assign" onPress={() => router.push("/admin")} testID="row-admin" />
               <Row icon="person-circle-outline" label="Manage team" onPress={() => router.push("/team")} testID="row-team" />
               <Row icon="receipt-outline" label="Expenses" onPress={() => router.push("/expenses")} testID="row-expenses" />
               <Row icon="stats-chart-outline" label="Reports (Excel)" onPress={() => router.push("/reports")} testID="row-reports" />

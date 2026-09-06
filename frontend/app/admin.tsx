@@ -89,7 +89,7 @@ export default function Admin() {
       <View style={styles.hdr}>
         <Pressable onPress={() => router.back()} style={styles.backIcon}><Ionicons name="chevron-back" size={22} color={theme.color.onSurface} /></Pressable>
         <View style={{ flex: 1 }}>
-          <Text style={styles.hdrTitle}>Reassign customers</Text>
+          <Text style={styles.hdrTitle}>Filter by area & assign</Text>
           <Text style={styles.hdrSub}>{selected.size} selected · {customers.length} total</Text>
         </View>
         {selected.size > 0 ? (
