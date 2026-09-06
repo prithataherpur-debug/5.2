@@ -11,6 +11,7 @@ import { API } from "@/src/lib/api";
 import { storage } from "@/src/utils/storage";
 import { TOKEN_KEY } from "@/src/lib/api";
 import { useAuth } from "@/src/lib/auth";
+import NetProfitChart from "@/src/components/NetProfitChart";
 
 const BACKEND = process.env.EXPO_PUBLIC_BACKEND_URL;
 
@@ -182,6 +183,14 @@ export default function Reports() {
             </View>
 
             <Text style={styles.section}>MONTHLY PROFIT & EXPENSE</Text>
+            {monthly && monthly.rows.length >= 2 ? (
+              <View style={styles.chartCard}>
+                <Text style={styles.chartTitle}>Net profit trend</Text>
+                <NetProfitChart
+                  data={monthly.rows.slice(0, 12).reverse().map((r) => ({ label: monthLabel(r.key).split(" ")[0], value: r.net_profit }))}
+                />
+              </View>
+            ) : null}
             {monthly && monthly.rows.length > 0 ? (
               <>
                 {monthly.rows.map((r) => (
@@ -301,6 +310,11 @@ const styles = StyleSheet.create({
   rowLabel: { fontSize: theme.font.scale.lg, fontWeight: "600", color: theme.color.onSurface },
   rowHint: { fontSize: theme.font.scale.sm, color: theme.color.muted, marginTop: 2 },
   backupHint: { fontSize: 11, color: theme.color.muted, marginTop: theme.space.sm, lineHeight: 16 },
+  chartCard: {
+    backgroundColor: theme.color.surfaceSecondary, borderRadius: theme.radius.md,
+    borderWidth: 1, borderColor: theme.color.border, padding: theme.space.md, marginBottom: theme.space.sm,
+  },
+  chartTitle: { fontSize: 13, fontWeight: "800", color: theme.color.onSurface, marginBottom: 4 },
   dayRow: { flexDirection: "row", alignItems: "center", padding: theme.space.md, borderBottomWidth: 1, borderBottomColor: theme.color.border },
   dayDate: { fontSize: 14, fontWeight: "800", color: theme.color.onSurface },
   dayMeta: { fontSize: 11, color: theme.color.muted, marginTop: 2 },

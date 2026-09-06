@@ -277,3 +277,11 @@ Repo `prithataherpur-debug/pc-2.0` (branch `main`) restored into workspace and b
 - **Area progress (home)**: each area header shows "{done}/{total} called" + a thin progress bar (done = customers whose status != pending).
 - **Unassigned view (admin "Filter by area & assign")**: added "Unassigned (N)" chip (sentinel filterEmp="__unassigned__", testID `filter-unassigned`) showing customers with no owner so none are missed; combines with area filter and can be bulk-assigned.
 - Frontend-only. Verified via screenshots (emp5 home progress + collapse; admin Unassigned → 1 shown "Unowned Lead"). Lint clean.
+
+---
+
+## Feature — Monthly net-profit line chart (admin, 2026-06)
+
+- Installed `react-native-svg` (15.12.1); added `/app/frontend/src/components/NetProfitChart.tsx` — a lightweight SVG line chart (polyline + per-point dots, dashed zero baseline, compact ₹ value label on the latest point, colored red for loss / green for profit).
+- Reports screen (already admin-only via role guard) shows a "Net profit trend" card above the monthly cards, plotting net_profit for the last 12 months chronologically. Renders only when >= 2 months of data exist. testID `net-profit-chart`.
+- Verified via screenshot (Jun→Sep trend line with ₹24.5k label). Lint clean.
