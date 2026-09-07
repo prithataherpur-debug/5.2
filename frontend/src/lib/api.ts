@@ -638,7 +638,9 @@ export type ReportBucket = {
   calls: number;
   breakdown: Record<string, number>;
   sales_count: number;
+  invoices_count: number;
   revenue: number;
+  profit?: number;
 };
 
 export type MyReport = {

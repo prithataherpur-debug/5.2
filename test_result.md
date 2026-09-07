@@ -105,6 +105,18 @@
 user_problem_statement: "Feature: Each employee (and admin) can view their OWN sales and call report, aggregated by week and by month. New endpoint GET /api/stats/my-report + new screen my-report.tsx. Also restored missing backend/.env and frontend/.env files (were gitignored / not restored from GitHub)."
 
 backend:
+  - task: "my-report now includes invoices (count/revenue) + profit (sales+invoices), profit admin-only"
+    implemented: true
+    working: "NA"
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "Extended GET /api/stats/my-report: each weekly/monthly bucket now also aggregates invoices — new field invoices_count (kept SEPARATE from sales_count per user), invoice total added into revenue, and new combined profit field = sale profit (amount - purchase_amount) + invoice profit (total - cost_total). Profit is ADMIN-ONLY: response includes is_admin flag; for non-admin users the 'profit' key is popped from every bucket (defence-in-depth) so employees never receive it. Verified locally via curl: admin sees profit + is_admin:true; emp1 has no profit key + is_admin:false. Seeded sale(1000, profit 1000) + invoice(total 1000, profit 400) → bucket sales_count=1, invoices_count=1, revenue=2000, profit=1400. Test data cleaned up."
+
   - task: "GET /api/stats/my-report — own weekly & monthly sales + call report"
     implemented: true
     working: true

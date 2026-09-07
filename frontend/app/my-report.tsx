@@ -18,6 +18,7 @@ export default function MyReportScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
   const [period, setPeriod] = useState<Period>("weekly");
   const [data, setData] = useState<MyReport | null>(null);
   const [loading, setLoading] = useState(true);
@@ -43,7 +44,9 @@ export default function MyReportScreen() {
   // Totals across the shown buckets
   const totalCalls = rows.reduce((a, b) => a + (b.calls || 0), 0);
   const totalSales = rows.reduce((a, b) => a + (b.sales_count || 0), 0);
+  const totalInvoices = rows.reduce((a, b) => a + (b.invoices_count || 0), 0);
   const totalRevenue = rows.reduce((a, b) => a + (b.revenue || 0), 0);
+  const totalProfit = rows.reduce((a, b) => a + (b.profit || 0), 0);
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]} testID="my-report-screen">
@@ -90,7 +93,11 @@ export default function MyReportScreen() {
             <View style={styles.summaryRow}>
               <SummaryStat icon="call" label="Calls" value={String(totalCalls)} />
               <SummaryStat icon="cart" label="Sales" value={String(totalSales)} />
+              <SummaryStat icon="document-text" label="Invoices" value={String(totalInvoices)} />
               <SummaryStat icon="cash" label="Revenue" value={fmtMoney(totalRevenue)} />
+              {isAdmin ? (
+                <SummaryStat icon="trending-up" label="Profit" value={fmtMoney(totalProfit)} />
+              ) : null}
             </View>
           </View>
 
@@ -123,7 +130,27 @@ export default function MyReportScreen() {
                       <Text style={styles.metricValue}>{r.sales_count}</Text>
                       <Text style={styles.metricLabel}>sales</Text>
                     </View>
+                    <View style={styles.metricBox}>
+                      <Ionicons name="document-text-outline" size={16} color={theme.color.brand} />
+                      <Text style={styles.metricValue}>{r.invoices_count}</Text>
+                      <Text style={styles.metricLabel}>invoices</Text>
+                    </View>
                   </View>
+
+                  {isAdmin ? (
+                    <View style={styles.profitRow}>
+                      <Ionicons name="trending-up" size={15} color={theme.color.success} />
+                      <Text style={styles.profitLabel}>Profit (sales + invoices)</Text>
+                      <Text
+                        style={[
+                          styles.profitValue,
+                          { color: (r.profit || 0) >= 0 ? theme.color.success : theme.color.error },
+                        ]}
+                      >
+                        {fmtMoney(r.profit)}
+                      </Text>
+                    </View>
+                  ) : null}
 
                   {statuses.length > 0 ? (
                     <View style={styles.breakRow}>
@@ -186,8 +213,8 @@ const styles = StyleSheet.create({
     padding: theme.space.lg, marginBottom: theme.space.lg,
   },
   summaryLabel: { color: theme.color.borderStrong, fontSize: 11, fontWeight: "700", letterSpacing: 1.5 },
-  summaryRow: { flexDirection: "row", gap: theme.space.md, marginTop: theme.space.md },
-  summaryStat: { flex: 1, alignItems: "flex-start" },
+  summaryRow: { flexDirection: "row", flexWrap: "wrap", gap: theme.space.md, rowGap: theme.space.lg, marginTop: theme.space.md },
+  summaryStat: { minWidth: "26%", flexGrow: 1, alignItems: "flex-start" },
   summaryValue: { color: "#fff", fontSize: 22, fontWeight: "900", marginTop: 6, letterSpacing: -0.5 },
   summaryStatLabel: { color: theme.color.borderStrong, fontSize: 11, fontWeight: "700", marginTop: 2 },
 
@@ -202,12 +229,19 @@ const styles = StyleSheet.create({
 
   metricRow: { flexDirection: "row", gap: theme.space.sm, marginTop: theme.space.md },
   metricBox: {
-    flex: 1, flexDirection: "row", alignItems: "center", gap: 6,
+    flex: 1, flexDirection: "row", alignItems: "center", gap: 4,
     backgroundColor: theme.color.surface, borderRadius: theme.radius.sm, borderWidth: 1, borderColor: theme.color.border,
-    paddingHorizontal: theme.space.md, paddingVertical: 10,
+    paddingHorizontal: theme.space.sm, paddingVertical: 10,
   },
   metricValue: { fontSize: 18, fontWeight: "900", color: theme.color.onSurface },
-  metricLabel: { fontSize: 12, color: theme.color.muted, fontWeight: "600" },
+  metricLabel: { fontSize: 11, color: theme.color.muted, fontWeight: "600" },
+
+  profitRow: {
+    flexDirection: "row", alignItems: "center", gap: 8, marginTop: theme.space.md,
+    paddingTop: theme.space.md, borderTopWidth: 1, borderTopColor: theme.color.border,
+  },
+  profitLabel: { flex: 1, fontSize: theme.font.scale.sm, color: theme.color.muted, fontWeight: "700" },
+  profitValue: { fontSize: 16, fontWeight: "900", letterSpacing: -0.3 },
 
   breakRow: { flexDirection: "row", flexWrap: "wrap", gap: theme.space.sm, marginTop: theme.space.md },
   pill: { flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: theme.color.surfaceTertiary, paddingHorizontal: theme.space.md, paddingVertical: 6, borderRadius: theme.radius.pill },

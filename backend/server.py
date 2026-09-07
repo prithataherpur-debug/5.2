@@ -1642,7 +1642,11 @@ async def stats_my_report(u=Depends(current_user), weeks: int = 8, months: int =
     ).to_list(100000)
     sale_docs = await db.sales.find(
         {"user": username, "date_key": {"$gte": overall_start_key}},
-        {"_id": 0, "date_key": 1, "amount": 1},
+        {"_id": 0, "date_key": 1, "amount": 1, "purchase_amount": 1},
+    ).to_list(100000)
+    invoice_docs = await db.invoices.find(
+        {"user": username, "date_key": {"$gte": overall_start_key}},
+        {"_id": 0, "date_key": 1, "total": 1, "profit": 1},
     ).to_list(100000)
 
     def parse_key(k):
@@ -1652,7 +1656,14 @@ async def stats_my_report(u=Depends(current_user), weeks: int = 8, months: int =
             return None
 
     def new_bucket(extra):
-        b = {"calls": 0, "breakdown": {s: 0 for s in VALID_STATUS}, "sales_count": 0, "revenue": 0.0}
+        b = {
+            "calls": 0,
+            "breakdown": {s: 0 for s in VALID_STATUS},
+            "sales_count": 0,
+            "invoices_count": 0,
+            "revenue": 0.0,
+            "profit": 0.0,
+        }
         b.update(extra)
         return b
 
@@ -1705,21 +1716,52 @@ async def stats_my_report(u=Depends(current_user), weeks: int = 8, months: int =
         if not d:
             continue
         amt = float(doc.get("amount") or 0)
+        purchase = doc.get("purchase_amount")
+        prof = amt - float(purchase or 0)
         wb = week_index.get(week_key_for(d))
         if wb is not None:
             wb["sales_count"] += 1
             wb["revenue"] += amt
+            wb["profit"] += prof
         mb = month_index.get(f"{d.year:04d}-{d.month:02d}")
         if mb is not None:
             mb["sales_count"] += 1
             mb["revenue"] += amt
+            mb["profit"] += prof
+
+    for doc in invoice_docs:
+        d = parse_key(doc.get("date_key"))
+        if not d:
+            continue
+        total = float(doc.get("total") or 0)
+        iprof = float(doc.get("profit") or 0)
+        wb = week_index.get(week_key_for(d))
+        if wb is not None:
+            wb["invoices_count"] += 1
+            wb["revenue"] += total
+            wb["profit"] += iprof
+        mb = month_index.get(f"{d.year:04d}-{d.month:02d}")
+        if mb is not None:
+            mb["invoices_count"] += 1
+            mb["revenue"] += total
+            mb["profit"] += iprof
 
     weekly.reverse()
     monthly.reverse()
 
+    # Profit is admin-only. Strip it from the payload for non-admin users so it is
+    # never exposed to employees (frontend also hides it, this is defence-in-depth).
+    is_admin = u.get("role") == "admin"
+    if not is_admin:
+        for b in weekly:
+            b.pop("profit", None)
+        for b in monthly:
+            b.pop("profit", None)
+
     return {
         "username": username,
         "display_name": u.get("display_name", username),
+        "is_admin": is_admin,
         "weekly": weekly,
         "monthly": monthly,
     }
