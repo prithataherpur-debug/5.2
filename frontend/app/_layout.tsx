@@ -44,9 +44,14 @@ function Gate() {
     if (loading) return;
     const first = segments[0] as string | undefined;
     const inAuthGroup = first === "login";
+    // `first === undefined` means we're on the bare index route (app/index.tsx),
+    // which is just a splash/logo with no navigation of its own.
+    const atSplash = first === undefined;
     if (!user && !inAuthGroup) {
       router.replace("/login");
-    } else if (user && inAuthGroup) {
+    } else if (user && (inAuthGroup || atSplash)) {
+      // Already signed in but sitting on the login or splash screen (e.g. on a
+      // cold app relaunch) — move to the dashboard so we never dead-end on the logo.
       router.replace("/(tabs)");
     }
   }, [user, loading, segments, router]);

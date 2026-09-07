@@ -206,6 +206,21 @@ backend_regression:
           comment: "Ledger endpoint returns 200 with expected structure. Route still resolves after adding /customers/search sibling route."
 
 frontend:
+  - task: "App relaunch / cold-start: authenticated user must land on dashboard, not dead-end on splash logo (APK opens once then won't open on 2nd launch)"
+    implemented: true
+    working: true
+    file: "/app/frontend/app/_layout.tsx, /app/frontend/src/lib/auth.tsx, /app/frontend/src/lib/api.ts"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "USER BUG: Published APK opens fine the first time but on the 2nd launch it stays on the splash/logo and never opens (also should open with no/poor internet). ROOT CAUSE (two parts): (1) app/index.tsx is a bare full-screen logo with no navigation; the Gate in _layout.tsx only redirected UNauthenticated users to /login and never moved an AUTHENTICATED user off the index/splash route, so on relaunch (already logged in) the app dead-ended on the logo. (2) AuthProvider.bootstrap did `await api.me()` (no timeout) BEFORE rendering, so on poor/no internet it hung; and any network error logged the user out (couldn't open offline). FIXES: (a) Gate now redirects `user && (inAuthGroup || atSplash)` -> /(tabs) so a signed-in user on the splash/login goes straight to the dashboard. (b) bootstrap now optimistically restores a locally cached user (new USER_KEY in AsyncStorage) and sets loading=false BEFORE any network call, then verifies via api.me() wrapped in an 8s withTimeout; it only signs out on a genuine 401/403 (ApiError.status) and keeps the cached session on network/timeout errors (offline-friendly). (c) api.req now throws ApiError with .status. Verified locally via standalone Playwright on preview: login (emp1/Emp@2026) -> dashboard; hard reload of '/' (relaunch sim) -> dashboard (previously blank/logo); reload with all /api/* requests aborted (offline sim) -> dashboard still opens from cache. Needs formal UI test."
+        - working: true
+          agent: "testing"
+          comment: "COMPREHENSIVE UI TEST PASSED (4/4 steps). Tested on web preview https://5dcdba40-223d-4640-9920-598f09799b47.preview.emergentagent.com with persistent browser session (simulates app relaunch). STEP 1 (LOGIN): ✅ PASSED - logged in with emp1/Emp@2026, reached dashboard showing 'Hi, Employee 1', 'Today's target 0/50', bottom tabs (Calls/Follow-ups/Progress/More). STEP 2 (RELAUNCH - CORE FIX): ✅ PASSED - performed 3 consecutive reloads of app root '/' in same session, ALL landed on dashboard with full content (NOT blank, NOT stuck on logo/splash, NOT perpetual spinner). This is the PRIMARY bug fix verification. STEP 3 (SIGN OUT then RELAUNCH): ✅ PASSED - clicked More tab, clicked Sign out (data-testid=row-signout), returned to login screen; reloaded '/' and stayed on login screen (not dashboard). STEP 4 (OFFLINE OPEN): ✅ PASSED - logged in, blocked all /api/** requests via Playwright route interception (simulating offline/no backend), reloaded '/', app opened to dashboard from cached session within 10s (blocked 5 API requests including /api/auth/me). App did NOT hang on spinner/logo, gracefully handled network failures. Console shows expected 'Failed to fetch' errors during offline test (correct behavior). BUG FIX VERIFIED: App now successfully relaunches to dashboard when user is logged in, handles sign out correctly, and opens offline from cache without hanging. The 'APK opens once then won't open on 2nd launch' bug is FIXED."
+
   - task: "My report screen — weekly/monthly toggle, sales + call breakdown"
     implemented: true
     working: "NA"
@@ -220,8 +235,8 @@ frontend:
 
 metadata:
   created_by: "testing_agent"
-  version: "24"
-  test_sequence: 24
+  version: "25"
+  test_sequence: 25
   run_ui: false
 
 test_plan:
@@ -232,10 +247,12 @@ test_plan:
 
 agent_communication:
     - agent: "main"
-      message: "PROJECT RE-OPEN (continuation): Restored missing gitignored env files (backend/.env: MONGO_URL/DB_NAME=pritha_cabinet/EMERGENT_LLM_KEY; frontend/.env: EXPO_PUBLIC_BACKEND_URL + packager proxy vars). Installed backend python deps (openpyxl etc were missing). FIXED a frontend infinite-loading-spinner bug: AuthProvider bootstrap used `useCallback(async ...,[])` as a `useEffect` dependency which kept `loading` true forever on web (React 19.1). Inlined bootstrap() directly inside useEffect([]). Verified via standalone Playwright: /login renders form, admin login (admin/Admin@2026) succeeds and dashboard loads with no console errors. Backend health + login verified via curl."
+      message: "BUG FIX (APK opens once, won't open on 2nd launch) — please UI-test the RELAUNCH flow. Credentials: emp1/Emp@2026 (or admin/Admin@2026). Steps to verify: (1) Load /login, sign in -> should reach the dashboard ('Hi, ...', Today's target, bottom tabs Calls/Follow-ups/Progress/More). (2) SIMULATE APP RELAUNCH: navigate/reload the app root URL '/' in the SAME browser session (token persists in storage) -> MUST land on the dashboard, NOT a blank page or the logo/splash. Repeat reload 2-3 times. (3) Sign out -> should return to /login; reload '/' -> should stay on /login (not dashboard). (4) OFFLINE OPEN (optional if supported): with a valid saved session, block all /api/* requests then reload '/' -> the app should STILL open to the dashboard from cached session within ~8s (it must not hang on a spinner/logo). The key regression to catch: a logged-in user reloading '/' must never get stuck on the splash logo or a perpetual spinner. This is web-preview verification of a native (APK) relaunch bug."
     - agent: "main"
       message: "Implemented 'My report' feature: GET /api/stats/my-report (own weekly/monthly sales+calls) and frontend screen my-report.tsx with weekly/monthly toggle, accessible via More tab to all users. Backend verified locally with seeded+cleaned test data. Also restored missing backend/.env (MONGO_URL/DB_NAME=pritha_cabinet/EMERGENT_LLM_KEY) and frontend/.env (EXPO_PUBLIC_BACKEND_URL) — they were gitignored and not restored from GitHub, which had left backend crashing on startup."
     - agent: "main"
       message: "DEPLOYMENT FIX: Production EAS Android build was failing with 'No lockfile found in the project directory' because frontend had only package-lock.json (npm) but package.json declares packageManager yarn@1.22.22 and EAS uses yarn. FIX: generated frontend/yarn.lock via yarn install and removed package-lock.json. Additional deployment-agent items addressed: removed surrounding quotes from backend/.env values; added EXPO_TUNNEL_SUBDOMAIN + EXPO_USE_FAST_RESOLVER to frontend/.env; updated supervisor expo command to include --tunnel and installed @expo/ngrok (Expo now logs 'Tunnel connected/ready', preview loads). deployment_agent now returns status: pass with no blockers. Requesting a backend smoke test to confirm the .env change + restart did not regress anything (health, admin/emp login, /api/stats/my-report)."
     - agent: "testing"
       message: "Backend smoke/regression test COMPLETE - ALL TESTS PASSED (8/8). Verified after deployment fix (removed quotes from backend/.env + restart): (1) Health endpoints working (GET /health, GET /). (2) Auth working for both admin and emp1 - login returns access_token + user object. (3) GET /api/stats/my-report working for both emp1 and admin - returns correct structure with 8 weekly + 6 monthly buckets, properly scoped to each user's own data. (4) Regression checks passed: GET /api/stats/today and GET /api/stats/leaderboard both working correctly. Backend reads unquoted MONGO_URL/DB_NAME from .env correctly, DB connection established, all core functionality intact. NO REGRESSIONS DETECTED. The deployment fix was successful."
+    - agent: "testing"
+      message: "BUG FIX VERIFICATION COMPLETE ✅ - App relaunch / cold-start bug is FIXED. Tested all 4 steps on web preview with persistent browser session: (1) LOGIN ✅ - emp1/Emp@2026 reaches dashboard. (2) RELAUNCH ✅ - 3 consecutive reloads of '/' ALL landed on dashboard (NOT blank/logo/spinner) - PRIMARY BUG FIX VERIFIED. (3) SIGN OUT ✅ - sign out works, reload '/' stays on login. (4) OFFLINE OPEN ✅ - with API blocked, app opens to dashboard from cache within 10s without hanging. The 'APK opens once then won't open on 2nd launch' issue is resolved. App now correctly redirects authenticated users from splash to dashboard on relaunch, handles offline gracefully via cached session, and only signs out on genuine 401/403 (not network errors). All tests passed, no regressions detected."

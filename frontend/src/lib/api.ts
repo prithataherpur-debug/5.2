@@ -4,6 +4,18 @@ const BASE = process.env.EXPO_PUBLIC_BACKEND_URL;
 export const API = `${BASE}/api`;
 
 export const TOKEN_KEY = "callflow_token";
+// Locally cached copy of the signed-in user so the app can restore the session
+// (and open) instantly on relaunch — even with no/poor internet.
+export const USER_KEY = "callflow_user";
+
+export class ApiError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
 
 // Derive a short "area"/locality from a free-text address.
 // e.g. "Salt Lake, Sector V" -> "Salt Lake". Empty for blank addresses.
@@ -222,7 +234,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API}${path}`, { ...init, headers });
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`API ${path} ${res.status}: ${text}`);
+    throw new ApiError(res.status, `API ${path} ${res.status}: ${text}`);
   }
   if (res.status === 204) return undefined as any;
   return res.json();
