@@ -14,7 +14,7 @@ import io
 import pytest
 import requests
 
-BASE_URL = os.environ.get("EXPO_PUBLIC_BACKEND_URL") or "https://code-launcher-122.preview.emergentagent.com"
+BASE_URL = os.environ.get("EXPO_PUBLIC_BACKEND_URL") or "https://open-now-12.preview.emergentagent.com"
 BASE_URL = BASE_URL.rstrip("/")
 API = f"{BASE_URL}/api"
 

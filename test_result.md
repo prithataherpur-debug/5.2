@@ -118,7 +118,7 @@ backend:
           comment: "New endpoint returns logged-in user's OWN data only (filtered by user==username). Buckets: weekly (last 8 weeks, Monday-based) and monthly (last 6 calendar months). Each bucket has total calls, per-status breakdown (VALID_STATUS), sales_count, revenue. Verified locally via curl with seeded emp1 records: weekly and monthly buckets aggregate correctly (this-week 3 calls/1 sale, prior-week, last-month). Test data cleaned up after. Params weeks (max 52) and months (max 24) clamped."
         - working: true
           agent: "testing"
-          comment: "Smoke test after deployment fix (removed quotes from backend/.env + restart). Tested with external URL https://code-launcher-122.preview.emergentagent.com. GET /api/stats/my-report?weeks=8&months=6 works for both emp1 and admin tokens - returns correct JSON structure with 8 weekly buckets and 6 monthly buckets, each containing calls, breakdown (per-status), sales_count, revenue. Confirmed data is scoped to the logged-in user (emp1 sees only emp1 data, admin sees only admin data). No regression detected."
+          comment: "Smoke test after deployment fix (removed quotes from backend/.env + restart). Tested with external URL https://open-now-12.preview.emergentagent.com. GET /api/stats/my-report?weeks=8&months=6 works for both emp1 and admin tokens - returns correct JSON structure with 8 weekly buckets and 6 monthly buckets, each containing calls, breakdown (per-status), sales_count, revenue. Confirmed data is scoped to the logged-in user (emp1 sees only emp1 data, admin sees only admin data). No regression detected."
 
 backend_regression:
   - task: "Deployment smoke test after .env fix (removed quotes) + backend restart"

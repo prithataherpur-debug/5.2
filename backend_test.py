@@ -9,7 +9,7 @@ import json
 import sys
 
 # Use the external ingress URL
-BASE_URL = "https://code-launcher-122.preview.emergentagent.com"
+BASE_URL = "https://open-now-12.preview.emergentagent.com"
 
 # Test credentials from /app/memory/test_credentials.md
 ADMIN_CREDS = {"username": "admin", "password": "Admin@2026"}

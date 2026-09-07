@@ -1,20 +1,13 @@
-# Test Credentials
-# Agent writes here when creating/modifying auth credentials (admin accounts, test users).
-# Testing agent reads this before auth tests. Fork/continuation agents read on startup.
+# Test Credentials — Pritha Cabinet CRM
 
-## Pritha Cabinet CRM
+## Admin
+- username: `admin`
+- password: `Admin@2026`
 
-Backend seeds these on startup (see backend/server.py lifespan).
+## Employees (emp1 .. emp7)
+- username: `emp1` (through `emp7`)
+- password: `Emp@2026`
 
-| Role     | Username | Password    |
-|----------|----------|-------------|
-| Admin    | admin    | Admin@2026  |
-| Employee | emp1     | Emp@2026    |
-| Employee | emp2     | Emp@2026    |
-| Employee | emp3     | Emp@2026    |
-| Employee | emp4     | Emp@2026    |
-| Employee | emp5     | Emp@2026    |
-| Employee | emp6     | Emp@2026    |
-| Employee | emp7     | Emp@2026    |
-
-Login endpoint: POST /api/auth/login  { "username", "password" }
+Notes:
+- Backend seeds these accounts automatically on startup (see lifespan in server.py).
+- DB_NAME=pritha_cabinet, MONGO_URL=mongodb://localhost:27017
