@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, ReactNode, useCallback } from "react";
+import { createContext, useContext, useEffect, useState, ReactNode } from "react";
 import { storage } from "@/src/utils/storage";
 import { api, TOKEN_KEY, User } from "@/src/lib/api";
 
@@ -18,7 +18,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const bootstrap = useCallback(async () => {
+  const bootstrap = async () => {
     const stored = await storage.secureGet(TOKEN_KEY, "");
     if (!stored) {
       setLoading(false);
@@ -34,11 +34,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  };
 
   useEffect(() => {
     bootstrap();
-  }, [bootstrap]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const signIn = async (username: string, password: string) => {
     const res = await api.login(username, password);
