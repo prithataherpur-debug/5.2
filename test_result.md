@@ -111,13 +111,28 @@ backend:
     file: "/app/backend/server.py"
     stuck_count: 0
     priority: "high"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
         - working: true
           agent: "main"
           comment: "New endpoint returns logged-in user's OWN data only (filtered by user==username). Buckets: weekly (last 8 weeks, Monday-based) and monthly (last 6 calendar months). Each bucket has total calls, per-status breakdown (VALID_STATUS), sales_count, revenue. Verified locally via curl with seeded emp1 records: weekly and monthly buckets aggregate correctly (this-week 3 calls/1 sale, prior-week, last-month). Test data cleaned up after. Params weeks (max 52) and months (max 24) clamped."
+        - working: true
+          agent: "testing"
+          comment: "Smoke test after deployment fix (removed quotes from backend/.env + restart). Tested with external URL https://code-launcher-122.preview.emergentagent.com. GET /api/stats/my-report?weeks=8&months=6 works for both emp1 and admin tokens - returns correct JSON structure with 8 weekly buckets and 6 monthly buckets, each containing calls, breakdown (per-status), sales_count, revenue. Confirmed data is scoped to the logged-in user (emp1 sees only emp1 data, admin sees only admin data). No regression detected."
 
 backend_regression:
+  - task: "Deployment smoke test after .env fix (removed quotes) + backend restart"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "testing"
+          comment: "Comprehensive smoke test after deployment fix (removed surrounding quotes from backend/.env values and restarted backend). All tests PASSED: (1) GET /health responds 200 (public URL returns Expo HTML as expected, K8s probes on port 8001 work correctly). (2) POST /api/auth/login works for both admin (admin/Admin@2026) and emp1 (emp1/Emp@2026) - returns access_token + user object, confirms seeded users exist and auth works after restart. (3) GET /api/stats/my-report?weeks=8&months=6 with emp1 token returns correct JSON with 8 weekly + 6 monthly buckets, scoped to emp1's own data. (4) Same endpoint works with admin token, scoped to admin's own data. (5) Spot-checks: GET /api/stats/today returns expected structure (date, goal, total_calls, breakdown, pending_customers, total_customers). GET /api/stats/leaderboard returns rows array with 7 employees. NO REGRESSIONS DETECTED. Backend reads MONGO_URL/DB_NAME from unquoted .env correctly, DB connection working, all core endpoints functional."
+
   - task: "Deployment health probe (GET /health at root, no /api prefix)"
     implemented: true
     working: true
@@ -193,8 +208,8 @@ frontend:
 
 metadata:
   created_by: "testing_agent"
-  version: "23"
-  test_sequence: 23
+  version: "24"
+  test_sequence: 24
   run_ui: false
 
 test_plan:
@@ -206,3 +221,7 @@ test_plan:
 agent_communication:
     - agent: "main"
       message: "Implemented 'My report' feature: GET /api/stats/my-report (own weekly/monthly sales+calls) and frontend screen my-report.tsx with weekly/monthly toggle, accessible via More tab to all users. Backend verified locally with seeded+cleaned test data. Also restored missing backend/.env (MONGO_URL/DB_NAME=pritha_cabinet/EMERGENT_LLM_KEY) and frontend/.env (EXPO_PUBLIC_BACKEND_URL) — they were gitignored and not restored from GitHub, which had left backend crashing on startup."
+    - agent: "main"
+      message: "DEPLOYMENT FIX: Production EAS Android build was failing with 'No lockfile found in the project directory' because frontend had only package-lock.json (npm) but package.json declares packageManager yarn@1.22.22 and EAS uses yarn. FIX: generated frontend/yarn.lock via yarn install and removed package-lock.json. Additional deployment-agent items addressed: removed surrounding quotes from backend/.env values; added EXPO_TUNNEL_SUBDOMAIN + EXPO_USE_FAST_RESOLVER to frontend/.env; updated supervisor expo command to include --tunnel and installed @expo/ngrok (Expo now logs 'Tunnel connected/ready', preview loads). deployment_agent now returns status: pass with no blockers. Requesting a backend smoke test to confirm the .env change + restart did not regress anything (health, admin/emp login, /api/stats/my-report)."
+    - agent: "testing"
+      message: "Backend smoke/regression test COMPLETE - ALL TESTS PASSED (8/8). Verified after deployment fix (removed quotes from backend/.env + restart): (1) Health endpoints working (GET /health, GET /). (2) Auth working for both admin and emp1 - login returns access_token + user object. (3) GET /api/stats/my-report working for both emp1 and admin - returns correct structure with 8 weekly + 6 monthly buckets, properly scoped to each user's own data. (4) Regression checks passed: GET /api/stats/today and GET /api/stats/leaderboard both working correctly. Backend reads unquoted MONGO_URL/DB_NAME from .env correctly, DB connection established, all core functionality intact. NO REGRESSIONS DETECTED. The deployment fix was successful."
