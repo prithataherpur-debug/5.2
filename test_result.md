@@ -157,6 +157,18 @@ backend_regression:
           agent: "testing"
           comment: "GET http://localhost:8001/health returns 200 {\"status\":\"ok\"} and GET / returns 200 {\"status\":\"ok\",\"service\":\"pritha-cabinet\"}. Note: public URL routes only /api/* to backend; /health on public URL returns Expo HTML (not the JSON). K8s pod-level probes hitting port 8001 will work as intended."
 
+  - task: "Smoke test after frontend deployment config fix (yarn.lock regeneration + Expo restart)"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "testing"
+          comment: "Quick regression smoke test after frontend deployment config changes (regenerated yarn.lock, removed package-lock.json, restarted Expo with --tunnel). NO backend code was changed. Tested with external URL https://upbeat-merkle-1.preview.emergentagent.com. ALL TESTS PASSED (4/4): (1) GET /api/health returns 404 as expected (public URL only routes /api/* to backend; health endpoint is at root /health, not /api/health - this is architectural behavior, not a regression). (2) POST /api/auth/login with admin credentials (admin/Admin@2026) returns 200 with access_token and user object. (3) GET /api/auth/me with admin Bearer token returns 200 with admin user details (username: admin, role: admin). (4) POST /api/auth/login with employee credentials (emp1/Emp@2026) returns 200 with access_token and user object. Core auth functionality verified working correctly. NO REGRESSIONS DETECTED - backend remains healthy after frontend deployment changes."
+
   - task: "GET /api/customers/search by name OR mobile"
     implemented: true
     working: true
@@ -235,8 +247,8 @@ frontend:
 
 metadata:
   created_by: "testing_agent"
-  version: "25"
-  test_sequence: 25
+  version: "26"
+  test_sequence: 26
   run_ui: false
 
 test_plan:
@@ -256,3 +268,5 @@ agent_communication:
       message: "Backend smoke/regression test COMPLETE - ALL TESTS PASSED (8/8). Verified after deployment fix (removed quotes from backend/.env + restart): (1) Health endpoints working (GET /health, GET /). (2) Auth working for both admin and emp1 - login returns access_token + user object. (3) GET /api/stats/my-report working for both emp1 and admin - returns correct structure with 8 weekly + 6 monthly buckets, properly scoped to each user's own data. (4) Regression checks passed: GET /api/stats/today and GET /api/stats/leaderboard both working correctly. Backend reads unquoted MONGO_URL/DB_NAME from .env correctly, DB connection established, all core functionality intact. NO REGRESSIONS DETECTED. The deployment fix was successful."
     - agent: "testing"
       message: "BUG FIX VERIFICATION COMPLETE ✅ - App relaunch / cold-start bug is FIXED. Tested all 4 steps on web preview with persistent browser session: (1) LOGIN ✅ - emp1/Emp@2026 reaches dashboard. (2) RELAUNCH ✅ - 3 consecutive reloads of '/' ALL landed on dashboard (NOT blank/logo/spinner) - PRIMARY BUG FIX VERIFIED. (3) SIGN OUT ✅ - sign out works, reload '/' stays on login. (4) OFFLINE OPEN ✅ - with API blocked, app opens to dashboard from cache within 10s without hanging. The 'APK opens once then won't open on 2nd launch' issue is resolved. App now correctly redirects authenticated users from splash to dashboard on relaunch, handles offline gracefully via cached session, and only signs out on genuine 401/403 (not network errors). All tests passed, no regressions detected."
+    - agent: "testing"
+      message: "SMOKE TEST AFTER FRONTEND DEPLOYMENT CONFIG FIX - ALL TESTS PASSED (4/4). Quick regression test after yarn.lock regeneration + Expo restart with --tunnel (NO backend code changed). Tested with external URL https://upbeat-merkle-1.preview.emergentagent.com. Results: (1) GET /api/health returns 404 as expected (architectural behavior: public URL only routes /api/* to backend, health endpoint is at root /health). (2) Admin login (admin/Admin@2026) works - returns 200 with access_token and user object. (3) GET /api/auth/me with admin token works - returns 200 with admin user details. (4) Employee login (emp1/Emp@2026) works - returns 200 with access_token and user object. Core auth functionality verified working correctly. NO REGRESSIONS DETECTED - backend remains healthy after frontend deployment changes."
