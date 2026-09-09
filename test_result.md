@@ -105,17 +105,35 @@
 user_problem_statement: "Feature: Each employee (and admin) can view their OWN sales and call report, aggregated by week and by month. New endpoint GET /api/stats/my-report + new screen my-report.tsx. Also restored missing backend/.env and frontend/.env files (were gitignored / not restored from GitHub)."
 
 backend:
-  - task: "my-report now includes invoices (count/revenue) + profit (sales+invoices), profit admin-only"
+  - task: "Delivery tracking for advance payments — receipt delivery fields + GET /api/deliveries + PATCH /api/deliveries/{id}"
     implemented: true
-    working: "NA"
+    working: true
     file: "/app/backend/server.py"
     stuck_count: 0
     priority: "high"
-    needs_retesting: true
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "NEW FEATURE (advance-payment delivery tracking). (1) MoneyReceipt gained delivery fields: delivery_status ('none'|'pending'|'delivered'), delivery_due_date (YYYY-MM-DD), delivered_at, delivery_note. (2) ReceiptCreateBody gained needs_delivery:bool + delivery_due_date:optional. In POST /api/receipts, when needs_delivery=true the receipt is saved delivery_status='pending' with delivery_due_date defaulting to TODAY+2 days if not supplied (else uses the given date). (3) NEW GET /api/deliveries?status=pending|delivered|all (all authenticated users) returns {date,count,pending_count,overdue_count,deliveries:[...]} where pending rows are sorted by due date asc and each row has an `overdue` flag (true when pending AND due_date < today). (4) NEW PATCH /api/deliveries/{receipt_id} body {mark_delivered?,reopen?,delivery_due_date?,delivery_note?} to mark delivered (sets delivered_at+updated_by), reopen, change due date, or set a note; returns the updated delivery row. Verified locally: /api/deliveries returns empty structure with admin token. Needs full testing: create an advance receipt with needs_delivery=true (verify default due=today+2 and it appears in pending list), mark it delivered (verify it leaves pending / appears in delivered), and an overdue case (past due_date → overdue:true). Also confirm existing receipts/advances/invoice flows are NOT regressed."
+        - working: true
+          agent: "testing"
+          comment: "COMPREHENSIVE DELIVERY TRACKING TEST - ALL TESTS PASSED (11/11). Tested on public URL https://a5d12c17-2a65-4082-bad6-428d840a89fc.preview.emergentagent.com/api with admin credentials. ✅ TEST 1 (Create advance with default due): POST /api/receipts with needs_delivery=true creates receipt with delivery_status='pending' and delivery_due_date=TODAY+2 (2026-09-11). ✅ TEST 2 (Create overdue advance): POST /api/receipts with delivery_due_date='2020-01-01' creates receipt with delivery_status='pending' and past due date. ✅ TEST 3 (List pending deliveries): GET /api/deliveries?status=pending returns correct structure {date, count, pending_count, overdue_count, deliveries:[]}. Both test receipts present, overdue receipt has overdue=true flag, deliveries sorted by due date ascending (oldest/overdue first). ✅ TEST 4 (Mark delivered): PATCH /api/deliveries/{id} with mark_delivered=true sets delivery_status='delivered', delivered_at timestamp, delivery_note='Handed over'. Receipt removed from pending list and appears in delivered list (GET /api/deliveries?status=delivered). ✅ TEST 5 (Update due date): PATCH /api/deliveries/{id} with delivery_due_date='2030-05-05' successfully updates due date. ✅ TEST 6 (Regression - normal receipt): POST /api/receipts without needs_delivery creates receipt with delivery_status='none' and does NOT appear in pending deliveries list. ✅ TEST 7a (Regression - GET /api/receipts): Returns array of receipts (200 OK). ✅ TEST 7b (Regression - GET /api/receipts/advances): Returns {advances:[]} structure (200 OK). ✅ TEST 8a (Validation - invalid date): PATCH with delivery_due_date='not-a-date' returns 400 error. ✅ TEST 8b (Validation - nonexistent ID): PATCH /api/deliveries/nonexistent-id returns 404 error. All test receipts cleaned up successfully. NO REGRESSIONS DETECTED. Feature is fully functional and production-ready."
+
+  - task: "my-report now includes invoices (count/revenue) + profit (sales+invoices), profit admin-only"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
     status_history:
         - working: "NA"
           agent: "main"
           comment: "Extended GET /api/stats/my-report: each weekly/monthly bucket now also aggregates invoices — new field invoices_count (kept SEPARATE from sales_count per user), invoice total added into revenue, and new combined profit field = sale profit (amount - purchase_amount) + invoice profit (total - cost_total). Profit is ADMIN-ONLY: response includes is_admin flag; for non-admin users the 'profit' key is popped from every bucket (defence-in-depth) so employees never receive it. Verified locally via curl: admin sees profit + is_admin:true; emp1 has no profit key + is_admin:false. Seeded sale(1000, profit 1000) + invoice(total 1000, profit 400) → bucket sales_count=1, invoices_count=1, revenue=2000, profit=1400. Test data cleaned up."
+        - working: true
+          agent: "testing"
+          comment: "COMPREHENSIVE MY-REPORT TEST - ALL TESTS PASSED (3/3). Tested on public URL https://a5d12c17-2a65-4082-bad6-428d840a89fc.preview.emergentagent.com/api with both admin and employee credentials. ✅ TEST 1 (Admin user): GET /api/stats/my-report?weeks=8&months=6 with admin token returns is_admin=true, 8 weekly buckets and 6 monthly buckets. Each bucket contains: calls, breakdown (dict with status keys), sales_count, invoices_count (NEW FIELD - separate from sales_count), revenue (includes both sales and invoices), and profit (NEW FIELD - admin-only, combines sale profit + invoice profit). Admin user correctly sees profit field in all buckets. ✅ TEST 2 (Employee user): GET /api/stats/my-report?weeks=8&months=6 with emp1 token returns is_admin=false, 8 weekly + 6 monthly buckets with same structure EXCEPT profit field is NOT present (admin-only restriction working correctly). Employee sees invoices_count and revenue but NOT profit. ✅ TEST 3 (Structure validation): Verified breakdown is dict type, all numeric fields (calls, sales_count, invoices_count, revenue, profit) are numbers. Weekly buckets have start/end dates, monthly buckets have key/label. ADMIN-ONLY PROFIT RESTRICTION VERIFIED: Employees cannot see profit data (defense-in-depth implementation working). NO REGRESSIONS DETECTED. Feature is fully functional and production-ready."
 
   - task: "GET /api/stats/my-report — own weekly & monthly sales + call report"
     implemented: true
@@ -218,6 +236,18 @@ backend_regression:
           comment: "Ledger endpoint returns 200 with expected structure. Route still resolves after adding /customers/search sibling route."
 
 frontend:
+  - task: "Pending Deliveries feature — delivery toggle on money-receipt form + deliveries.tsx screen"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/app/deliveries.tsx, /app/frontend/app/receipts.tsx, /app/frontend/app/(tabs)/more.tsx, /app/frontend/app/_layout.tsx, /app/frontend/src/lib/api.ts"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "NEW FEATURE UI (advance-payment delivery tracking). (1) Money-receipt create form (receipts.tsx): added a 'Product to be delivered later' checkbox; when ticked a Delivery due date (YYYY-MM-DD, defaults to today+2) with quick chips (Tomorrow/+2/+3/+7) appears; submit sends needs_delivery + delivery_due_date. Only shown on CREATE (not edit). (2) New screen deliveries.tsx ('Pending Deliveries', route registered in _layout, row added in More tab visible to all): Awaiting/Delivered segmented tabs, cards show customer, mobile, amount, due-date chip (Overdue in RED / Due today / Due in N days / Delivered date), narration + delivery note; pull-to-refresh; 'Mark delivered' opens a modal for an optional delivery note then PATCH /deliveries/{id} {mark_delivered:true}; delivered items can be 'Reopen'ed. (3) api.ts: added Delivery type, listDeliveries(status), updateDelivery(id,patch), and delivery fields on createReceipt/MoneyReceipt. Self-verified via Playwright: screen renders with live empty-state (0 awaiting), no runtime errors. Backend endpoints already passed testing. NEEDS full UI test of the create-advance-with-delivery → appears in Awaiting → Mark delivered → moves to Delivered flow."
+
   - task: "Login: admin password reported invalid — differentiate wrong-credentials from network/config errors"
     implemented: true
     working: true
@@ -260,8 +290,8 @@ frontend:
 
 metadata:
   created_by: "testing_agent"
-  version: "27"
-  test_sequence: 27
+  version: "28"
+  test_sequence: 28
   run_ui: false
 
 test_plan:
@@ -271,6 +301,8 @@ test_plan:
   test_priority: "high_first"
 
 agent_communication:
+    - agent: "main"
+      message: "Please test the NEW delivery-tracking backend endpoints. Auth: admin/Admin@2026 or emp1/Emp@2026. Scenarios: (1) POST /api/receipts with body {customer_name:'Del Test', customer_mobile:'9990001111', amount:500, payment_mode:'cash', source_type:'other', needs_delivery:true} → response should have delivery_status='pending' and delivery_due_date = TODAY+2 (YYYY-MM-DD). (2) POST /api/receipts with needs_delivery:true AND delivery_due_date:'2020-01-01' (PAST date) → GET /api/deliveries?status=pending should include this with overdue:true. (3) GET /api/deliveries?status=pending → {date,count,pending_count,overdue_count,deliveries:[]}; receipts from (1)&(2) must appear sorted by due date asc. (4) PATCH /api/deliveries/{id} {mark_delivered:true, delivery_note:'Handed over'} → delivery_status='delivered', delivered_at set; then it must DISAPPEAR from status=pending and APPEAR in status=delivered. (5) PATCH /api/deliveries/{id} {delivery_due_date:'2030-05-05'} → updates due date. (6) Regression: POST /api/receipts WITHOUT needs_delivery must work with delivery_status='none' and must NOT appear in /api/deliveries. Spot-check GET /api/receipts and GET /api/receipts/advances still work. Please CLEAN UP any test receipts you create."
     - agent: "main"
       message: "USER BUG 'admin password showing invalid' — please UI-test the LOGIN screen on the web preview. Credentials that MUST work: admin/Admin@2026 (admin) and emp1/Emp@2026 (employee). Backend is confirmed healthy (curl login returns 200 for both). Verify: (1) Load /login, sign in with admin/Admin@2026 → should reach the dashboard (no error text). (2) Sign out (More tab → Sign out), then login with emp1/Emp@2026 → dashboard. (3) Enter a WRONG password for admin → the inline error (testID login-error) should read exactly 'Invalid username or password.' and stay on /login. (4) Confirm a correct login does NOT show any error. Note: login screen may take a few seconds to render on first load (heavy dev web bundle) — wait/retry as needed. The fix changed only error messaging (network vs 401) — correct credentials must succeed."
     - agent: "main"
@@ -287,3 +319,7 @@ agent_communication:
       message: "SMOKE TEST AFTER FRONTEND DEPLOYMENT CONFIG FIX - ALL TESTS PASSED (4/4). Quick regression test after yarn.lock regeneration + Expo restart with --tunnel (NO backend code changed). Tested with external URL https://open-my-project-10.preview.emergentagent.com. Results: (1) GET /api/health returns 404 as expected (architectural behavior: public URL only routes /api/* to backend, health endpoint is at root /health). (2) Admin login (admin/Admin@2026) works - returns 200 with access_token and user object. (3) GET /api/auth/me with admin token works - returns 200 with admin user details. (4) Employee login (emp1/Emp@2026) works - returns 200 with access_token and user object. Core auth functionality verified working correctly. NO REGRESSIONS DETECTED - backend remains healthy after frontend deployment changes."
     - agent: "testing"
       message: "LOGIN BUG FIX VERIFICATION COMPLETE ✅ - 'Admin password showing invalid' bug is FIXED. Comprehensive UI test passed (5/5 steps) on web preview https://a5d12c17-2a65-4082-bad6-428d840a89fc.preview.emergentagent.com. PRIMARY VERIFICATION: (1) ✅ Admin login with CORRECT credentials (admin/Admin@2026) successfully navigates to dashboard showing 'Hi, Admin' with NO error message - this confirms the reported bug is fixed. (2) ✅ Employee login (emp1/Emp@2026) works correctly, shows 'Hi, Employee 1'. (3) ✅ Wrong password (admin/WrongPass123) correctly shows error 'Invalid username or password.' and stays on login page. (4) ✅ Correct password after wrong attempt successfully logs in with no error. (5) ✅ Sign out flow works correctly. The fix successfully differentiates between wrong credentials (401/403 → shows error) and correct credentials (no error, successful login). All test scenarios passed, no issues detected."
+    - agent: "testing"
+      message: "DELIVERY TRACKING BACKEND TEST COMPLETE ✅ - ALL TESTS PASSED (11/11). Comprehensive testing of NEW delivery tracking feature on public URL https://a5d12c17-2a65-4082-bad6-428d840a89fc.preview.emergentagent.com/api. RESULTS: (1) ✅ Create advance with delivery (default due=TODAY+2): POST /api/receipts with needs_delivery=true correctly creates receipt with delivery_status='pending' and delivery_due_date='2026-09-11' (TODAY+2). (2) ✅ Create overdue advance: POST /api/receipts with delivery_due_date='2020-01-01' creates receipt with past due date. (3) ✅ List pending deliveries: GET /api/deliveries?status=pending returns correct structure {date, count, pending_count, overdue_count, deliveries:[]}. Both test receipts present, overdue receipt has overdue=true flag, deliveries sorted by due date ascending (oldest/overdue first). (4) ✅ Mark delivered: PATCH /api/deliveries/{id} with mark_delivered=true sets delivery_status='delivered', delivered_at timestamp, delivery_note. Receipt removed from pending list and appears in delivered list. (5) ✅ Update due date: PATCH /api/deliveries/{id} with delivery_due_date='2030-05-05' successfully updates. (6) ✅ Regression - normal receipt: POST /api/receipts without needs_delivery creates receipt with delivery_status='none' and does NOT appear in pending deliveries. (7) ✅ Regression - GET /api/receipts and GET /api/receipts/advances both working (200 OK). (8) ✅ Validation: Invalid date returns 400, nonexistent ID returns 404. All test receipts cleaned up. NO REGRESSIONS DETECTED. Feature is fully functional and production-ready."
+    - agent: "testing"
+      message: "MY-REPORT WITH INVOICES & PROFIT TEST COMPLETE ✅ - ALL TESTS PASSED (3/3). Tested GET /api/stats/my-report on public URL https://a5d12c17-2a65-4082-bad6-428d840a89fc.preview.emergentagent.com/api with both admin and employee users. RESULTS: (1) ✅ Admin user: GET /api/stats/my-report?weeks=8&months=6 with admin token returns is_admin=true, 8 weekly + 6 monthly buckets. Each bucket contains: calls, breakdown (dict), sales_count, invoices_count (NEW - separate from sales_count), revenue (includes sales + invoices), and profit (NEW - admin-only, combines sale profit + invoice profit). Admin correctly sees profit field. (2) ✅ Employee user: Same endpoint with emp1 token returns is_admin=false, 8 weekly + 6 monthly buckets with invoices_count and revenue but NO profit field (admin-only restriction working correctly). (3) ✅ Structure validation: breakdown is dict, all numeric fields are numbers, weekly buckets have start/end dates, monthly buckets have key/label. ADMIN-ONLY PROFIT RESTRICTION VERIFIED: Employees cannot see profit data (defense-in-depth working). NO REGRESSIONS DETECTED. Feature is fully functional and production-ready."

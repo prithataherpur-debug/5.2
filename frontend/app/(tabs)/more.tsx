@@ -36,6 +36,7 @@ export default function More() {
           <Row icon="cash-outline" label="Sales" onPress={() => router.push("/sales")} testID="row-sales" />
           <Row icon="document-text-outline" label="Invoices" onPress={() => router.push("/invoices")} testID="row-invoices" />
           <Row icon="receipt-outline" label="Money receipts" onPress={() => router.push("/receipts")} testID="row-receipts" />
+          <Row icon="cube-outline" label="Pending deliveries" onPress={() => router.push("/deliveries")} testID="row-deliveries" />
           <Row icon="book-outline" label="Daybook" onPress={() => router.push("/daybook")} testID="row-daybook" />
           <Row icon="calendar-outline" label="Attendance history" onPress={() => router.push("/attendance")} testID="row-attendance" />
           <Row icon="time-outline" label="Call history" onPress={() => router.push("/history")} testID="row-history" />

@@ -15,6 +15,13 @@ import { useAuth } from "@/src/lib/auth";
 import DateNavigator, { todayKey } from "@/src/components/DateNavigator";
 
 const fmt = (n: number) => "₹" + (Math.round(n * 100) / 100).toLocaleString("en-IN");
+const plusDays = (n: number) => {
+  const d = new Date();
+  d.setDate(d.getDate() + n);
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${d.getFullYear()}-${mm}-${dd}`;
+};
 type SrcType = "sale" | "invoice" | "collection" | "other";
 type Mode = "cash" | "online" | "mixed";
 const SOURCES: { key: SrcType; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
@@ -249,6 +256,8 @@ function ReceiptEditor({
   const [refNo, setRefNo] = useState("");
   const [narration, setNarration] = useState("");
   const [notes, setNotes] = useState("");
+  const [needsDelivery, setNeedsDelivery] = useState(false);
+  const [deliveryDue, setDeliveryDue] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [srcInfo, setSrcInfo] = useState<Awaited<ReturnType<typeof api.getReceiptSource>> | null>(null);
@@ -358,6 +367,8 @@ function ReceiptEditor({
         reference_no: refNo.trim() || undefined,
         narration: narration.trim(),
         notes: notes.trim(),
+        needs_delivery: !editing && needsDelivery ? true : undefined,
+        delivery_due_date: !editing && needsDelivery && deliveryDue.trim() ? deliveryDue.trim() : undefined,
       };
       if (editing) {
         const r = await api.replaceReceipt(editing.id, body);
@@ -490,6 +501,65 @@ function ReceiptEditor({
                 <Text style={styles.advHintText}>
                   This will be recorded as an <Text style={{ fontWeight: "800" }}>advance payment</Text>. Attach it to a bill later from the Invoice screen.
                 </Text>
+              </View>
+            ) : null}
+
+            {!editing ? (
+              <View style={styles.delivBox}>
+                <Pressable
+                  onPress={() => {
+                    const next = !needsDelivery;
+                    setNeedsDelivery(next);
+                    if (next && !deliveryDue) setDeliveryDue(plusDays(2));
+                  }}
+                  style={styles.delivToggleRow}
+                  testID="rcpt-delivery-toggle"
+                >
+                  <View style={[styles.checkbox, needsDelivery && styles.checkboxOn]}>
+                    {needsDelivery ? <Ionicons name="checkmark" size={14} color="#fff" /> : null}
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.delivToggleLabel}>Product to be delivered later</Text>
+                    <Text style={styles.delivToggleHint}>Track this in Pending Deliveries until handed over</Text>
+                  </View>
+                  <Ionicons name="cube-outline" size={18} color={needsDelivery ? theme.color.brand : theme.color.muted} />
+                </Pressable>
+
+                {needsDelivery ? (
+                  <View style={{ marginTop: theme.space.sm }}>
+                    <Text style={styles.label}>Delivery due date (YYYY-MM-DD)</Text>
+                    <TextInput
+                      value={deliveryDue}
+                      onChangeText={setDeliveryDue}
+                      placeholder="2025-08-20"
+                      placeholderTextColor={theme.color.muted}
+                      autoCapitalize="none"
+                      style={styles.input}
+                      testID="rcpt-delivery-date"
+                    />
+                    <View style={styles.quickRow}>
+                      {[
+                        { label: "Tomorrow", d: 1 },
+                        { label: "+2 days", d: 2 },
+                        { label: "+3 days", d: 3 },
+                        { label: "+7 days", d: 7 },
+                      ].map((q) => {
+                        const val = plusDays(q.d);
+                        const active = deliveryDue === val;
+                        return (
+                          <Pressable
+                            key={q.label}
+                            onPress={() => setDeliveryDue(val)}
+                            style={[styles.quickChip, active && styles.quickChipActive]}
+                            testID={`rcpt-delivery-quick-${q.d}`}
+                          >
+                            <Text style={[styles.quickChipText, active && styles.quickChipTextActive]}>{q.label}</Text>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+                  </View>
+                ) : null}
               </View>
             ) : null}
 
@@ -640,4 +710,24 @@ const styles = StyleSheet.create({
     flexDirection: "row", alignItems: "flex-start", gap: 5,
   },
   advHintText: { flex: 1, fontSize: 11, color: "#78350F", lineHeight: 15 },
+  delivBox: {
+    marginTop: theme.space.md, padding: theme.space.md, borderRadius: theme.radius.md,
+    backgroundColor: theme.color.surfaceTertiary, borderWidth: 1, borderColor: theme.color.border,
+  },
+  delivToggleRow: { flexDirection: "row", alignItems: "center", gap: theme.space.sm },
+  checkbox: {
+    width: 24, height: 24, borderRadius: 6, borderWidth: 2, borderColor: theme.color.muted,
+    alignItems: "center", justifyContent: "center",
+  },
+  checkboxOn: { backgroundColor: theme.color.brand, borderColor: theme.color.brand },
+  delivToggleLabel: { fontSize: theme.font.scale.md, fontWeight: "700", color: theme.color.onSurface },
+  delivToggleHint: { fontSize: 11, color: theme.color.muted, marginTop: 1 },
+  quickRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 8 },
+  quickChip: {
+    paddingHorizontal: 12, paddingVertical: 7, borderRadius: 999,
+    backgroundColor: theme.color.surfaceSecondary, borderWidth: 1, borderColor: theme.color.border,
+  },
+  quickChipActive: { backgroundColor: theme.color.brand, borderColor: theme.color.brand },
+  quickChipText: { fontSize: 12, fontWeight: "600", color: theme.color.muted },
+  quickChipTextActive: { color: "#fff" },
 });

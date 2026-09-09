@@ -343,6 +343,8 @@ class ReceiptCreateBody(BaseModel):
     reference_no: Optional[str] = None  # explicit override; auto-filled from source if omitted
     narration: Optional[str] = ""
     notes: Optional[str] = ""
+    needs_delivery: bool = False  # advance paid, product to be delivered later
+    delivery_due_date: Optional[str] = None  # YYYY-MM-DD; defaults to today+2 when needs_delivery
 
 
 class ReceiptPatchBody(BaseModel):
@@ -376,6 +378,18 @@ class MoneyReceipt(BaseModel):
     pdf_token: Optional[str] = None
     date_key: str
     created_at: str
+    # Delivery tracking (for advance payments where the product ships later)
+    delivery_status: str = "none"  # none | pending | delivered
+    delivery_due_date: Optional[str] = None  # YYYY-MM-DD
+    delivered_at: Optional[str] = None
+    delivery_note: str = ""
+
+
+class DeliveryPatchBody(BaseModel):
+    mark_delivered: Optional[bool] = None
+    reopen: Optional[bool] = None
+    delivery_due_date: Optional[str] = None
+    delivery_note: Optional[str] = None
 
 
 class ExpenseBody(BaseModel):
@@ -3859,6 +3873,16 @@ async def create_receipt(body: ReceiptCreateBody, u=Depends(current_user)):
     src_label = await _resolve_source_label(st, body.source_id)
     display = await _display_name_for(u["username"])
 
+    # Delivery tracking: an advance where the product ships later.
+    delivery_status = "none"
+    delivery_due_date = None
+    if body.needs_delivery:
+        delivery_status = "pending"
+        due = (body.delivery_due_date or "").strip()
+        if not due:
+            due = (datetime.now(timezone.utc).date() + timedelta(days=2)).strftime("%Y-%m-%d")
+        delivery_due_date = due
+
     # Determine reference number: explicit override > auto-derived from source > empty (=advance)
     if body.reference_no is not None and body.reference_no.strip():
         ref_no = body.reference_no.strip()
@@ -3911,6 +3935,10 @@ async def create_receipt(body: ReceiptCreateBody, u=Depends(current_user)):
         "pdf_path": pdf_path,
         "date_key": date_key,
         "created_at": now,
+        "delivery_status": delivery_status,
+        "delivery_due_date": delivery_due_date,
+        "delivered_at": None,
+        "delivery_note": "",
     }
     await db.receipts.insert_one(doc)
     doc["display_name"] = display
@@ -3975,6 +4003,111 @@ async def list_advance_receipts_early(
         if d.get("pdf_path"):
             d["pdf_token"] = _make_media_token(d["pdf_path"])
     return {"advances": docs, "count": len(docs), "total_amount": float(sum(d.get("amount", 0) for d in docs))}
+
+
+def _delivery_out(d: dict, today: str) -> dict:
+    """Shape a receipt doc into a delivery row with an overdue flag."""
+    due = d.get("delivery_due_date")
+    status = d.get("delivery_status") or "none"
+    overdue = bool(status == "pending" and due and due < today)
+    return {
+        "id": d["id"],
+        "receipt_no": d.get("receipt_no"),
+        "customer_id": d.get("customer_id"),
+        "customer_name": d.get("customer_name") or "",
+        "customer_mobile": d.get("customer_mobile") or "",
+        "customer_address": d.get("customer_address") or "",
+        "amount": float(d.get("amount") or 0),
+        "payment_mode": d.get("payment_mode") or "cash",
+        "reference_no": d.get("reference_no") or "",
+        "source_type": d.get("source_type") or "other",
+        "source_label": d.get("source_label") or "",
+        "narration": d.get("narration") or "",
+        "notes": d.get("notes") or "",
+        "user": d.get("user"),
+        "display_name": d.get("display_name"),
+        "created_at": d.get("created_at"),
+        "delivery_status": status,
+        "delivery_due_date": due,
+        "delivered_at": d.get("delivered_at"),
+        "delivery_note": d.get("delivery_note") or "",
+        "pdf_token": d.get("pdf_token"),
+        "overdue": overdue,
+    }
+
+
+@api_router.get("/deliveries")
+async def list_deliveries(status: str = "pending", limit: int = 200, _=Depends(current_user)):
+    """List money receipts flagged for delivery. Visible to ALL authenticated users.
+    status: pending (default) | delivered | all. Pending sorted by due date (soonest first),
+    with an `overdue` flag; delivered sorted by most-recently delivered.
+    """
+    status = (status or "pending").lower()
+    limit = max(1, min(int(limit or 200), 500))
+    today = today_key()
+    if status == "pending":
+        q = {"delivery_status": "pending"}
+        sort_field, sort_dir = "delivery_due_date", 1
+    elif status == "delivered":
+        q = {"delivery_status": "delivered"}
+        sort_field, sort_dir = "delivered_at", -1
+    else:  # all tracked
+        q = {"delivery_status": {"$in": ["pending", "delivered"]}}
+        sort_field, sort_dir = "delivery_due_date", 1
+    docs = await db.receipts.find(q, {"_id": 0}).sort(sort_field, sort_dir).limit(limit).to_list(limit)
+    name_cache: dict = {}
+    rows = []
+    pending_count = 0
+    overdue_count = 0
+    for d in docs:
+        uname = d.get("user")
+        if uname and uname not in name_cache:
+            name_cache[uname] = await _display_name_for(uname)
+        d["display_name"] = name_cache.get(uname)
+        if d.get("pdf_path"):
+            d["pdf_token"] = _make_media_token(d["pdf_path"])
+        row = _delivery_out(d, today)
+        if row["delivery_status"] == "pending":
+            pending_count += 1
+            if row["overdue"]:
+                overdue_count += 1
+        rows.append(row)
+    return {"date": today, "count": len(rows), "pending_count": pending_count, "overdue_count": overdue_count, "deliveries": rows}
+
+
+@api_router.patch("/deliveries/{receipt_id}")
+async def update_delivery(receipt_id: str, body: DeliveryPatchBody, u=Depends(current_user)):
+    """Mark a delivery done / reopen it / change its due date. Any authenticated user."""
+    r = await db.receipts.find_one({"id": receipt_id}, {"_id": 0})
+    if not r:
+        raise HTTPException(404, "Receipt not found")
+    updates: dict = {}
+    if body.mark_delivered:
+        updates["delivery_status"] = "delivered"
+        updates["delivered_at"] = now_iso()
+        updates["delivery_updated_by"] = u["username"]
+    if body.reopen:
+        updates["delivery_status"] = "pending"
+        updates["delivered_at"] = None
+    if body.delivery_due_date is not None:
+        due = body.delivery_due_date.strip()
+        if due and not re.match(r"^\d{4}-\d{2}-\d{2}$", due):
+            raise HTTPException(400, "delivery_due_date must be YYYY-MM-DD")
+        updates["delivery_due_date"] = due or None
+        # setting a due date implies it is (again) awaiting delivery unless we just delivered it
+        if not body.mark_delivered and (r.get("delivery_status") in (None, "none")):
+            updates["delivery_status"] = "pending"
+    if body.delivery_note is not None:
+        updates["delivery_note"] = body.delivery_note.strip()
+    if not updates:
+        raise HTTPException(400, "No changes provided")
+    await db.receipts.update_one({"id": receipt_id}, {"$set": updates})
+    fresh = await db.receipts.find_one({"id": receipt_id}, {"_id": 0})
+    if fresh.get("user"):
+        fresh["display_name"] = await _display_name_for(fresh["user"])
+    if fresh.get("pdf_path"):
+        fresh["pdf_token"] = _make_media_token(fresh["pdf_path"])
+    return _delivery_out(fresh, today_key())
 
 
 @api_router.get("/receipts/source/{source_type}/{source_id}")

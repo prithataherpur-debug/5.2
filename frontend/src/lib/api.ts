@@ -221,6 +221,10 @@ export type MoneyReceipt = {
   pdf_token?: string | null;
   date_key: string;
   created_at: string;
+  delivery_status?: "none" | "pending" | "delivered";
+  delivery_due_date?: string | null;
+  delivered_at?: string | null;
+  delivery_note?: string;
   /** Daybook only: true = counted as fresh money in grand total; false = informational (linked to a source counted today) */
   counted_standalone?: boolean;
 };
@@ -534,6 +538,7 @@ export const api = {
     reference_no?: string;
     narration?: string; notes?: string;
     customer_id?: string;
+    needs_delivery?: boolean; delivery_due_date?: string;
   }) => req<MoneyReceipt>(`/receipts`, { method: "POST", body: JSON.stringify(body) }),
   updateReceipt: (id: string, body: {
     reference_no?: string; source_type?: "sale" | "invoice" | "collection" | "other";
@@ -647,6 +652,41 @@ export const api = {
 
   myReport: (weeks = 8, months = 6) =>
     req<MyReport>(`/stats/my-report?weeks=${weeks}&months=${months}`),
+
+  // ---- Deliveries (advance payments awaiting product delivery) ----
+  listDeliveries: (status: "pending" | "delivered" | "all" = "pending") =>
+    req<{ date: string; count: number; pending_count: number; overdue_count: number; deliveries: Delivery[] }>(
+      `/deliveries?status=${status}`,
+    ),
+  updateDelivery: (
+    id: string,
+    body: { mark_delivered?: boolean; reopen?: boolean; delivery_due_date?: string; delivery_note?: string },
+  ) => req<Delivery>(`/deliveries/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+};
+
+export type Delivery = {
+  id: string;
+  receipt_no: string;
+  customer_id?: string | null;
+  customer_name: string;
+  customer_mobile: string;
+  customer_address: string;
+  amount: number;
+  payment_mode: string;
+  reference_no: string;
+  source_type: string;
+  source_label: string;
+  narration: string;
+  notes: string;
+  user?: string;
+  display_name?: string | null;
+  created_at?: string;
+  delivery_status: "pending" | "delivered" | "none";
+  delivery_due_date?: string | null;
+  delivered_at?: string | null;
+  delivery_note: string;
+  pdf_token?: string | null;
+  overdue: boolean;
 };
 
 export type ReportBucket = {
