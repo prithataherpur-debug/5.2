@@ -37,7 +37,6 @@ if (Platform.OS === "android") {
 
 function Gate() {
   const { user, loading } = useAuth();
-  console.log("DIAG Gate render: loading=", loading, "user=", !!user);
   const segments = useSegments();
   const router = useRouter();
 
@@ -84,7 +83,6 @@ function Gate() {
 
 export default function RootLayout() {
   const [loaded, error] = useIconFonts();
-  console.log("DIAG RootLayout: fontsLoaded=", loaded, "error=", !!error);
   const router = useRouter();
 
   useEffect(() => {

@@ -37,7 +37,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   const bootstrap = async () => {
-    console.log("DIAG bootstrap:start");
     // Hard safety net: no matter what happens below (slow/hanging storage,
     // IndexedDB stalls, etc.), the splash spinner must clear so the app can render.
     const safety = setTimeout(() => setLoading(false), 4000);

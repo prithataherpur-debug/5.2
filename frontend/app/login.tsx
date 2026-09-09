@@ -16,6 +16,7 @@ import { Ionicons } from "@expo/vector-icons";
 
 import { theme } from "@/src/lib/theme";
 import { useAuth } from "@/src/lib/auth";
+import { ApiError } from "@/src/lib/api";
 
 export default function Login() {
   const insets = useSafeAreaInsets();
@@ -35,7 +36,16 @@ export default function Login() {
     try {
       await signIn(username.trim(), password);
     } catch (e: any) {
-      setErr("Invalid username or password.");
+      // Distinguish a genuine wrong-credentials response (HTTP 401/403) from a
+      // connectivity/config problem — otherwise a network failure looks exactly
+      // like a bad password and users think their (correct) password is wrong.
+      if (e instanceof ApiError && (e.status === 401 || e.status === 403)) {
+        setErr("Invalid username or password.");
+      } else if (e instanceof ApiError) {
+        setErr(`Server error (${e.status}). Please try again.`);
+      } else {
+        setErr("Can't reach the server. Check your internet connection and try again.");
+      }
     } finally {
       setBusy(false);
     }

@@ -218,7 +218,20 @@ backend_regression:
           comment: "Ledger endpoint returns 200 with expected structure. Route still resolves after adding /customers/search sibling route."
 
 frontend:
-  - task: "App relaunch / cold-start: authenticated user must land on dashboard, not dead-end on splash logo (APK opens once then won't open on 2nd launch)"
+  - task: "Login: admin password reported invalid — differentiate wrong-credentials from network/config errors"
+    implemented: true
+    working: true
+    file: "/app/frontend/app/login.tsx, /app/frontend/src/lib/auth.tsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: "NA"
+          agent: "main"
+          comment: "USER BUG: 'password of admin is showing invalid'. RCA: backend login is fine (curl admin/Admin@2026 and emp1/Emp@2026 both return 200 + token on localhost AND public URL; DB seeded). The login screen's catch block previously showed 'Invalid username or password.' for ANY thrown error — including network/URL failures — so a connectivity/config problem (e.g. an APK built while frontend/.env with EXPO_PUBLIC_BACKEND_URL was missing) looked identical to a wrong password. Also restored the missing backend/.env + frontend/.env (were gitignored) and installed missing python deps (openpyxl/reportlab) so backend runs. FIX: login.tsx now inspects ApiError.status → 401/403 shows 'Invalid username or password.'; other ApiError shows 'Server error (N)'; non-ApiError (fetch/network) shows 'Can't reach the server. Check your internet connection…'. Verified locally via own Playwright on preview web: admin/Admin@2026 → dashboard (no error); wrong password → 'Invalid username or password.' stays on /login. Also hardened auth bootstrap with a storage-read timeout + 4s safety net so the splash can never hang. NEEDS formal UI test."
+        - working: true
+          agent: "testing"
+          comment: "COMPREHENSIVE LOGIN FLOW TEST PASSED (5/5 steps). Tested on web preview https://a5d12c17-2a65-4082-bad6-428d840a89fc.preview.emergentagent.com. PRIMARY BUG FIX VERIFIED: (1) ✅ Admin login (admin/Admin@2026) - successfully navigated to dashboard showing 'Hi, Admin', NO error message visible (this is the PRIMARY bug fix - correct admin password now works without showing 'invalid' error). (2) ✅ Sign out - clicked More tab, clicked Sign out button (testID=row-signout), returned to login screen. (3) ✅ Employee login (emp1/Emp@2026) - successfully reached dashboard showing 'Hi, Employee 1'. (4) ✅ Wrong password test (admin/WrongPass123) - stayed on login page, error message displayed EXACTLY 'Invalid username or password.' (testID=login-error). (5) ✅ Correct password after wrong attempt - successfully navigated to dashboard, NO error message visible. BUG FIX CONFIRMED: The login screen now correctly differentiates between wrong credentials (shows 'Invalid username or password.') and successful login (no error). The user's reported issue 'admin password showing invalid' is FIXED - correct credentials (admin/Admin@2026 and emp1/Emp@2026) both login successfully without any error message."
     implemented: true
     working: true
     file: "/app/frontend/app/_layout.tsx, /app/frontend/src/lib/auth.tsx, /app/frontend/src/lib/api.ts"
@@ -247,8 +260,8 @@ frontend:
 
 metadata:
   created_by: "testing_agent"
-  version: "26"
-  test_sequence: 26
+  version: "27"
+  test_sequence: 27
   run_ui: false
 
 test_plan:
@@ -258,6 +271,8 @@ test_plan:
   test_priority: "high_first"
 
 agent_communication:
+    - agent: "main"
+      message: "USER BUG 'admin password showing invalid' — please UI-test the LOGIN screen on the web preview. Credentials that MUST work: admin/Admin@2026 (admin) and emp1/Emp@2026 (employee). Backend is confirmed healthy (curl login returns 200 for both). Verify: (1) Load /login, sign in with admin/Admin@2026 → should reach the dashboard (no error text). (2) Sign out (More tab → Sign out), then login with emp1/Emp@2026 → dashboard. (3) Enter a WRONG password for admin → the inline error (testID login-error) should read exactly 'Invalid username or password.' and stay on /login. (4) Confirm a correct login does NOT show any error. Note: login screen may take a few seconds to render on first load (heavy dev web bundle) — wait/retry as needed. The fix changed only error messaging (network vs 401) — correct credentials must succeed."
     - agent: "main"
       message: "BUG FIX (APK opens once, won't open on 2nd launch) — please UI-test the RELAUNCH flow. Credentials: emp1/Emp@2026 (or admin/Admin@2026). Steps to verify: (1) Load /login, sign in -> should reach the dashboard ('Hi, ...', Today's target, bottom tabs Calls/Follow-ups/Progress/More). (2) SIMULATE APP RELAUNCH: navigate/reload the app root URL '/' in the SAME browser session (token persists in storage) -> MUST land on the dashboard, NOT a blank page or the logo/splash. Repeat reload 2-3 times. (3) Sign out -> should return to /login; reload '/' -> should stay on /login (not dashboard). (4) OFFLINE OPEN (optional if supported): with a valid saved session, block all /api/* requests then reload '/' -> the app should STILL open to the dashboard from cached session within ~8s (it must not hang on a spinner/logo). The key regression to catch: a logged-in user reloading '/' must never get stuck on the splash logo or a perpetual spinner. This is web-preview verification of a native (APK) relaunch bug."
     - agent: "main"
@@ -270,3 +285,5 @@ agent_communication:
       message: "BUG FIX VERIFICATION COMPLETE ✅ - App relaunch / cold-start bug is FIXED. Tested all 4 steps on web preview with persistent browser session: (1) LOGIN ✅ - emp1/Emp@2026 reaches dashboard. (2) RELAUNCH ✅ - 3 consecutive reloads of '/' ALL landed on dashboard (NOT blank/logo/spinner) - PRIMARY BUG FIX VERIFIED. (3) SIGN OUT ✅ - sign out works, reload '/' stays on login. (4) OFFLINE OPEN ✅ - with API blocked, app opens to dashboard from cache within 10s without hanging. The 'APK opens once then won't open on 2nd launch' issue is resolved. App now correctly redirects authenticated users from splash to dashboard on relaunch, handles offline gracefully via cached session, and only signs out on genuine 401/403 (not network errors). All tests passed, no regressions detected."
     - agent: "testing"
       message: "SMOKE TEST AFTER FRONTEND DEPLOYMENT CONFIG FIX - ALL TESTS PASSED (4/4). Quick regression test after yarn.lock regeneration + Expo restart with --tunnel (NO backend code changed). Tested with external URL https://open-my-project-10.preview.emergentagent.com. Results: (1) GET /api/health returns 404 as expected (architectural behavior: public URL only routes /api/* to backend, health endpoint is at root /health). (2) Admin login (admin/Admin@2026) works - returns 200 with access_token and user object. (3) GET /api/auth/me with admin token works - returns 200 with admin user details. (4) Employee login (emp1/Emp@2026) works - returns 200 with access_token and user object. Core auth functionality verified working correctly. NO REGRESSIONS DETECTED - backend remains healthy after frontend deployment changes."
+    - agent: "testing"
+      message: "LOGIN BUG FIX VERIFICATION COMPLETE ✅ - 'Admin password showing invalid' bug is FIXED. Comprehensive UI test passed (5/5 steps) on web preview https://a5d12c17-2a65-4082-bad6-428d840a89fc.preview.emergentagent.com. PRIMARY VERIFICATION: (1) ✅ Admin login with CORRECT credentials (admin/Admin@2026) successfully navigates to dashboard showing 'Hi, Admin' with NO error message - this confirms the reported bug is fixed. (2) ✅ Employee login (emp1/Emp@2026) works correctly, shows 'Hi, Employee 1'. (3) ✅ Wrong password (admin/WrongPass123) correctly shows error 'Invalid username or password.' and stays on login page. (4) ✅ Correct password after wrong attempt successfully logs in with no error. (5) ✅ Sign out flow works correctly. The fix successfully differentiates between wrong credentials (401/403 → shows error) and correct credentials (no error, successful login). All test scenarios passed, no issues detected."
