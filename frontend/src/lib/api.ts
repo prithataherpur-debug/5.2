@@ -1,9 +1,13 @@
+import { Platform } from "react-native";
 import { storage } from "@/src/utils/storage";
 
-// Falls back to a same-origin relative "/api" (works in the web preview via the
-// ingress proxy) if EXPO_PUBLIC_BACKEND_URL is ever missing, so login can never
-// fail with an "undefined/api" URL.
-const BASE = process.env.EXPO_PUBLIC_BACKEND_URL || "";
+// On WEB (incl. the Emergent preview iframe) always use a SAME-ORIGIN relative
+// "/api" path — the platform ingress proxies "/api/*" to the backend, so it works
+// no matter which host/iframe serves the app (avoids cross-origin / unreachable
+// absolute-URL failures). On NATIVE (Expo Go / APK) there is no proxy, so we must
+// use the absolute EXPO_PUBLIC_BACKEND_URL that gets baked into the build.
+const BASE =
+  Platform.OS === "web" ? "" : process.env.EXPO_PUBLIC_BACKEND_URL || "";
 export const API = `${BASE}/api`;
 
 export const TOKEN_KEY = "callflow_token";
