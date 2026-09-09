@@ -37,8 +37,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   const bootstrap = async () => {
+    console.log("DIAG bootstrap:start");
+    // Hard safety net: no matter what happens below (slow/hanging storage,
+    // IndexedDB stalls, etc.), the splash spinner must clear so the app can render.
+    const safety = setTimeout(() => setLoading(false), 4000);
     try {
-      const stored = await storage.secureGet(TOKEN_KEY, "");
+      const stored = await withTimeout(storage.secureGet(TOKEN_KEY, ""), 3000).catch(() => "");
       if (!stored) {
         setLoading(false);
         return;
@@ -47,7 +51,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       // Optimistically restore the last known user so the app opens INSTANTLY
       // (even offline). We never block the first render on a network call.
-      const cachedRaw = await storage.getItem(USER_KEY, "");
+      const cachedRaw = await withTimeout(storage.getItem(USER_KEY, ""), 3000).catch(() => "");
       if (cachedRaw) {
         try {
           setUser(JSON.parse(cachedRaw as string) as User);
@@ -72,6 +76,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     } catch {
       // Never let bootstrap crash/hang the app.
+      setLoading(false);
+    } finally {
+      clearTimeout(safety);
       setLoading(false);
     }
   };

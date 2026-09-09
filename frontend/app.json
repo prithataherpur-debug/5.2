@@ -54,7 +54,8 @@
       ]
     ],
     "experiments": {
-      "typedRoutes": true
+      "typedRoutes": true,
+      "asyncRoutes": false
     }
   }
 }

@@ -9,7 +9,7 @@ import json
 import sys
 
 # Backend URL from frontend/.env
-BASE_URL = "https://upbeat-merkle-1.preview.emergentagent.com/api"
+BASE_URL = "https://open-my-project-10.preview.emergentagent.com/api"
 
 # Test credentials from /app/memory/test_credentials.md
 ADMIN_CREDS = {"username": "admin", "password": "Admin@2026"}
