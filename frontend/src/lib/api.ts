@@ -1,6 +1,9 @@
 import { storage } from "@/src/utils/storage";
 
-const BASE = process.env.EXPO_PUBLIC_BACKEND_URL;
+// Falls back to a same-origin relative "/api" (works in the web preview via the
+// ingress proxy) if EXPO_PUBLIC_BACKEND_URL is ever missing, so login can never
+// fail with an "undefined/api" URL.
+const BASE = process.env.EXPO_PUBLIC_BACKEND_URL || "";
 export const API = `${BASE}/api`;
 
 export const TOKEN_KEY = "callflow_token";
