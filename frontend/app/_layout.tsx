@@ -157,8 +157,9 @@ export default function RootLayout() {
 
   if (!loaded && !error) return null;
 
-  // Web version discontinued — the app runs on mobile (Android/iOS) only.
-  if (Platform.OS === "web") {
+  // Web version discontinued for PRODUCTION only — the dev/preview browser still
+  // works so the app can be previewed here. Published/hosted web builds are blocked.
+  if (Platform.OS === "web" && !__DEV__) {
     return (
       <SafeAreaProvider>
         <WebBlocked />
