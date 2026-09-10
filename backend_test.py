@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Comprehensive backend test for APPROVAL RULE CHANGE:
-Only BACK-DATED employee entries go pending; same-day employee entries auto-approved.
+Comprehensive backend test for TEAM-STATS ENDPOINT:
+GET /api/admin/team-stats with period filter (today/week/month/all)
+Per-employee total sell (sales+invoices), revenue, profit + admin row + grand totals
 """
 
 import requests
@@ -24,10 +25,11 @@ test_data = {
     "customers": []
 }
 
-# Known legitimate pending entries (DO NOT DELETE)
-LEGITIMATE_PENDING = {
-    "invoice": "e5d334e7-1341-4f30-a697-1d689e9c17ec",
-    "receipt": "a5361459-582d-47b5-a0ab-ec712800f62b"
+# CRITICAL: Known REAL USER DATA - DO NOT DELETE
+REAL_USER_DATA = {
+    "sale": "36cb7374-128a-41fe-b8ef-d48bf03492c6",  # ₹10000
+    "invoice": "e5d334e7-1341-4f30-a697-1d689e9c17ec",  # ₹5000
+    "receipt": "a5361459-582d-47b5-a0ab-ec712800f62b"  # ₹10000
 }
 
 
@@ -47,16 +49,6 @@ def get_headers(token: str) -> Dict[str, str]:
 def get_today() -> str:
     """Get today's date in YYYY-MM-DD format."""
     return datetime.now().strftime("%Y-%m-%d")
-
-
-def get_past_date(days_ago: int = 5) -> str:
-    """Get a past date in YYYY-MM-DD format."""
-    return (datetime.now() - timedelta(days=days_ago)).strftime("%Y-%m-%d")
-
-
-def get_future_date(days_ahead: int = 5) -> str:
-    """Get a future date in YYYY-MM-DD format."""
-    return (datetime.now() + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
 
 
 def create_test_customer(token: str, name: str, phone: str) -> Dict:
@@ -84,8 +76,11 @@ def cleanup():
     admin_token = login(ADMIN_CREDS)
     headers = get_headers(admin_token)
     
-    # Delete test sales
+    # Delete test sales (SKIP REAL USER DATA)
     for sale_id in test_data["sales"]:
+        if sale_id == REAL_USER_DATA["sale"]:
+            print(f"⊗ SKIPPED REAL USER DATA: sale {sale_id}")
+            continue
         try:
             resp = requests.delete(f"{BASE_URL}/sales/{sale_id}", headers=headers)
             if resp.status_code == 200:
@@ -93,11 +88,10 @@ def cleanup():
         except Exception as e:
             print(f"✗ Failed to delete sale {sale_id}: {e}")
     
-    # Delete test invoices
+    # Delete test invoices (SKIP REAL USER DATA)
     for invoice_id in test_data["invoices"]:
-        # Skip legitimate pending entries
-        if invoice_id == LEGITIMATE_PENDING["invoice"]:
-            print(f"⊗ Skipped legitimate pending invoice {invoice_id}")
+        if invoice_id == REAL_USER_DATA["invoice"]:
+            print(f"⊗ SKIPPED REAL USER DATA: invoice {invoice_id}")
             continue
         try:
             resp = requests.delete(f"{BASE_URL}/invoices/{invoice_id}", headers=headers)
@@ -106,11 +100,10 @@ def cleanup():
         except Exception as e:
             print(f"✗ Failed to delete invoice {invoice_id}: {e}")
     
-    # Delete test receipts
+    # Delete test receipts (SKIP REAL USER DATA)
     for receipt_id in test_data["receipts"]:
-        # Skip legitimate pending entries
-        if receipt_id == LEGITIMATE_PENDING["receipt"]:
-            print(f"⊗ Skipped legitimate pending receipt {receipt_id}")
+        if receipt_id == REAL_USER_DATA["receipt"]:
+            print(f"⊗ SKIPPED REAL USER DATA: receipt {receipt_id}")
             continue
         try:
             resp = requests.delete(f"{BASE_URL}/receipts/{receipt_id}", headers=headers)
@@ -134,13 +127,12 @@ def cleanup():
 
 
 def run_tests():
-    """Run all approval rule change tests."""
+    """Run all team-stats endpoint tests."""
     print("\n" + "="*80)
-    print("APPROVAL RULE CHANGE TEST SUITE")
+    print("TEAM-STATS ENDPOINT TEST SUITE")
     print("="*80)
     print(f"Base URL: {BASE_URL}")
     print(f"Today's date: {get_today()}")
-    print(f"Past date (5 days ago): {get_past_date(5)}")
     print("="*80 + "\n")
     
     results = {
@@ -156,560 +148,411 @@ def run_tests():
         emp1_token = login(EMP1_CREDS)
         print("✓ Login successful\n")
         
-        # Create test customer for emp1
-        print("Creating test customer...")
-        customer = create_test_customer(emp1_token, "Approval Test Customer", "9998887777")
+        # ========================================================================
+        # TEST (a): Default (no period param) → period='today'
+        # Expected: totals {sales_count:1, invoices_count:0, total_count:1, revenue:10000, profit:500}
+        # admin object all zeros; emp1 row has all 5 new fields
+        # ========================================================================
+        print("TEST (a): GET /api/admin/team-stats (default/no period) → period='today'")
+        print("-" * 80)
+        resp = requests.get(f"{BASE_URL}/admin/team-stats", headers=get_headers(admin_token))
+        if resp.status_code == 200:
+            data = resp.json()
+            print(f"✓ Response 200 OK")
+            print(f"  Period: {data.get('period')}")
+            print(f"  Totals: {data.get('totals')}")
+            print(f"  Admin: {data.get('admin')}")
+            
+            # Verify period is 'today'
+            if data.get('period') == 'today':
+                print(f"  ✓ Period is 'today' (default)")
+            else:
+                print(f"  ✗ Period is '{data.get('period')}', expected 'today'")
+            
+            # Verify totals structure
+            totals = data.get('totals', {})
+            expected_totals = {
+                "sales_count": 1,
+                "invoices_count": 0,
+                "total_count": 1,
+                "revenue": 10000,
+                "profit": 500
+            }
+            
+            totals_match = True
+            for key, expected_val in expected_totals.items():
+                actual_val = totals.get(key)
+                if actual_val == expected_val:
+                    print(f"  ✓ totals.{key} = {actual_val} (expected {expected_val})")
+                else:
+                    print(f"  ✗ totals.{key} = {actual_val}, expected {expected_val}")
+                    totals_match = False
+            
+            # Verify admin object (should be all zeros)
+            admin_obj = data.get('admin', {})
+            admin_zeros = (
+                admin_obj.get('sales_count') == 0 and
+                admin_obj.get('invoices_count') == 0 and
+                admin_obj.get('total_count') == 0 and
+                admin_obj.get('revenue') == 0 and
+                admin_obj.get('profit') == 0
+            )
+            if admin_zeros:
+                print(f"  ✓ Admin object all zeros: {admin_obj}")
+            else:
+                print(f"  ✗ Admin object NOT all zeros: {admin_obj}")
+            
+            # Verify emp1 row has all 5 new fields
+            rows = data.get('rows', [])
+            emp1_row = next((r for r in rows if r.get('username') == 'emp1'), None)
+            if emp1_row:
+                required_fields = ['sales_count', 'invoices_count', 'total_count', 'revenue', 'profit']
+                emp1_has_fields = all(field in emp1_row for field in required_fields)
+                if emp1_has_fields:
+                    print(f"  ✓ emp1 row has all 5 fields: sales_count={emp1_row.get('sales_count')}, invoices_count={emp1_row.get('invoices_count')}, total_count={emp1_row.get('total_count')}, revenue={emp1_row.get('revenue')}, profit={emp1_row.get('profit')}")
+                else:
+                    print(f"  ✗ emp1 row missing fields: {emp1_row}")
+            else:
+                print(f"  ✗ emp1 row not found in rows")
+                emp1_has_fields = False
+            
+            if data.get('period') == 'today' and totals_match and admin_zeros and emp1_has_fields:
+                print(f"✓ PASS: TEST (a)")
+                results["passed"] += 1
+                results["tests"].append({"test": "TEST (a)", "status": "PASS", "details": "Default period='today' with correct totals"})
+            else:
+                print(f"✗ FAIL: TEST (a)")
+                results["failed"] += 1
+                results["tests"].append({"test": "TEST (a)", "status": "FAIL", "details": "Period or totals mismatch"})
+        else:
+            print(f"✗ FAIL: Response {resp.status_code} {resp.text}")
+            results["failed"] += 1
+            results["tests"].append({"test": "TEST (a)", "status": "FAIL", "details": f"API error: {resp.status_code}"})
+        print()
+        
+        # ========================================================================
+        # TEST (b): period=week, period=month, period=all
+        # Expected: totals {sales_count:1, invoices_count:1, total_count:2, revenue:15000, profit:1500}
+        # (₹5000 invoice dated 2026-09-09 = yesterday, excluded from 'today', included in week/month/all)
+        # ========================================================================
+        for period in ['week', 'month', 'all']:
+            print(f"TEST (b.{period}): GET /api/admin/team-stats?period={period}")
+            print("-" * 80)
+            resp = requests.get(f"{BASE_URL}/admin/team-stats?period={period}", headers=get_headers(admin_token))
+            if resp.status_code == 200:
+                data = resp.json()
+                print(f"✓ Response 200 OK")
+                print(f"  Period: {data.get('period')}")
+                print(f"  Totals: {data.get('totals')}")
+                
+                # Verify period
+                if data.get('period') == period:
+                    print(f"  ✓ Period is '{period}'")
+                else:
+                    print(f"  ✗ Period is '{data.get('period')}', expected '{period}'")
+                
+                # Verify totals
+                totals = data.get('totals', {})
+                expected_totals = {
+                    "sales_count": 1,
+                    "invoices_count": 1,
+                    "total_count": 2,
+                    "revenue": 15000,
+                    "profit": 1500
+                }
+                
+                totals_match = True
+                for key, expected_val in expected_totals.items():
+                    actual_val = totals.get(key)
+                    if actual_val == expected_val:
+                        print(f"  ✓ totals.{key} = {actual_val} (expected {expected_val})")
+                    else:
+                        print(f"  ✗ totals.{key} = {actual_val}, expected {expected_val}")
+                        totals_match = False
+                
+                if data.get('period') == period and totals_match:
+                    print(f"✓ PASS: TEST (b.{period})")
+                    results["passed"] += 1
+                    results["tests"].append({"test": f"TEST (b.{period})", "status": "PASS", "details": f"period={period} with correct totals"})
+                else:
+                    print(f"✗ FAIL: TEST (b.{period})")
+                    results["failed"] += 1
+                    results["tests"].append({"test": f"TEST (b.{period})", "status": "FAIL", "details": "Period or totals mismatch"})
+            else:
+                print(f"✗ FAIL: Response {resp.status_code} {resp.text}")
+                results["failed"] += 1
+                results["tests"].append({"test": f"TEST (b.{period})", "status": "FAIL", "details": f"API error: {resp.status_code}"})
+            print()
+        
+        # ========================================================================
+        # TEST (c): Create sale as emp1 today → verify totals increase → DELETE
+        # ========================================================================
+        print("TEST (c): Create sale as emp1 today (amount 1000, purchase_amount 200)")
+        print("-" * 80)
+        
+        # Create test customer
+        customer = create_test_customer(emp1_token, "Team Stats Test Customer", "9991112222")
         if not customer:
             print("✗ Failed to create test customer")
-            return results
-        customer_id = customer["id"]
-        print(f"✓ Created customer {customer_id}\n")
-        
-        # ========================================================================
-        # TEST 1: emp1 POST /api/sales without date_key → status MUST be 'approved'
-        # ========================================================================
-        print("TEST 1: emp1 creates same-day sale (no date_key) → status 'approved'")
-        print("-" * 80)
-        payload = {
-            "customer_id": customer_id,
-            "customer_name": "Approval Test Customer",
-            "amount": 1000,
-            "payment_mode": "cash",
-            "product": "Test Product 1",
-            "notes": "Same-day sale test"
-        }
-        resp = requests.post(f"{BASE_URL}/sales", json=payload, headers=get_headers(emp1_token))
-        if resp.status_code == 200:
-            sale = resp.json()
-            test_data["sales"].append(sale["id"])
-            if sale.get("status") == "approved":
-                print(f"✓ PASS: Sale created with status 'approved' (id: {sale['id']})")
-                print(f"  Date: {sale.get('date_key')}, Status: {sale.get('status')}")
-                results["passed"] += 1
-                results["tests"].append({"test": "TEST 1", "status": "PASS", "details": "Same-day employee sale auto-approved"})
-            else:
-                print(f"✗ FAIL: Sale status is '{sale.get('status')}', expected 'approved'")
-                results["failed"] += 1
-                results["tests"].append({"test": "TEST 1", "status": "FAIL", "details": f"Status is '{sale.get('status')}' instead of 'approved'"})
-        else:
-            print(f"✗ FAIL: Failed to create sale: {resp.status_code} {resp.text}")
             results["failed"] += 1
-            results["tests"].append({"test": "TEST 1", "status": "FAIL", "details": f"API error: {resp.status_code}"})
-        print()
-        
-        # ========================================================================
-        # TEST 2: emp1 POST /api/sales with past date_key → status 'pending'
-        # ========================================================================
-        print("TEST 2: emp1 creates back-dated sale → status 'pending'")
-        print("-" * 80)
-        past_date = get_past_date(5)
-        payload = {
-            "customer_id": customer_id,
-            "customer_name": "Approval Test Customer",
-            "amount": 2000,
-            "payment_mode": "cash",
-            "product": "Test Product 2",
-            "notes": "Back-dated sale test",
-            "date_key": past_date
-        }
-        resp = requests.post(f"{BASE_URL}/sales", json=payload, headers=get_headers(emp1_token))
-        if resp.status_code == 200:
-            sale = resp.json()
-            test_data["sales"].append(sale["id"])
-            if sale.get("status") == "pending":
-                print(f"✓ PASS: Back-dated sale created with status 'pending' (id: {sale['id']})")
-                print(f"  Date: {sale.get('date_key')}, Status: {sale.get('status')}")
-                results["passed"] += 1
-                results["tests"].append({"test": "TEST 2", "status": "PASS", "details": "Back-dated employee sale goes pending"})
-                
-                # Verify it appears in admin approvals
-                print("  Verifying sale appears in admin approvals...")
-                resp_approvals = requests.get(f"{BASE_URL}/approvals", headers=get_headers(admin_token))
-                if resp_approvals.status_code == 200:
-                    approvals = resp_approvals.json()
-                    found = any(item["id"] == sale["id"] and item["kind"] == "sale" for item in approvals.get("items", []))
-                    if found:
-                        print(f"  ✓ Sale appears in admin approvals queue")
-                    else:
-                        print(f"  ✗ WARNING: Sale NOT found in admin approvals queue")
-                else:
-                    print(f"  ✗ WARNING: Failed to fetch approvals: {resp_approvals.status_code}")
-            else:
-                print(f"✗ FAIL: Sale status is '{sale.get('status')}', expected 'pending'")
-                results["failed"] += 1
-                results["tests"].append({"test": "TEST 2", "status": "FAIL", "details": f"Status is '{sale.get('status')}' instead of 'pending'"})
+            results["tests"].append({"test": "TEST (c)", "status": "FAIL", "details": "Customer creation failed"})
         else:
-            print(f"✗ FAIL: Failed to create sale: {resp.status_code} {resp.text}")
-            results["failed"] += 1
-            results["tests"].append({"test": "TEST 2", "status": "FAIL", "details": f"API error: {resp.status_code}"})
-        print()
-        
-        # ========================================================================
-        # TEST 3: emp1 POST /api/invoices without date_key → status 'approved'
-        # ========================================================================
-        print("TEST 3: emp1 creates same-day invoice (no date_key) → status 'approved'")
-        print("-" * 80)
-        payload = {
-            "customer_name": "Approval Test Customer",
-            "customer_mobile": "9998887777",
-            "customer_id": customer_id,
-            "items": [
-                {"name": "Item 1", "qty": 2, "unit_price": 500}
-            ],
-            "notes": "Same-day invoice test"
-        }
-        resp = requests.post(f"{BASE_URL}/invoices", json=payload, headers=get_headers(emp1_token))
-        if resp.status_code == 200:
-            invoice = resp.json()
-            test_data["invoices"].append(invoice["id"])
-            if invoice.get("status") == "approved":
-                print(f"✓ PASS: Invoice created with status 'approved' (id: {invoice['id']})")
-                print(f"  Date: {invoice.get('date_key')}, Status: {invoice.get('status')}")
-                results["passed"] += 1
-                results["tests"].append({"test": "TEST 3", "status": "PASS", "details": "Same-day employee invoice auto-approved"})
-            else:
-                print(f"✗ FAIL: Invoice status is '{invoice.get('status')}', expected 'approved'")
-                results["failed"] += 1
-                results["tests"].append({"test": "TEST 3", "status": "FAIL", "details": f"Status is '{invoice.get('status')}' instead of 'approved'"})
-        else:
-            print(f"✗ FAIL: Failed to create invoice: {resp.status_code} {resp.text}")
-            results["failed"] += 1
-            results["tests"].append({"test": "TEST 3", "status": "FAIL", "details": f"API error: {resp.status_code}"})
-        print()
-        
-        # ========================================================================
-        # TEST 4: emp1 POST /api/invoices with past date_key → status 'pending'
-        # ========================================================================
-        print("TEST 4: emp1 creates back-dated invoice → status 'pending'")
-        print("-" * 80)
-        past_date = get_past_date(7)
-        payload = {
-            "customer_name": "Approval Test Customer",
-            "customer_mobile": "9998887777",
-            "customer_id": customer_id,
-            "items": [
-                {"name": "Item 2", "qty": 1, "unit_price": 1500}
-            ],
-            "notes": "Back-dated invoice test",
-            "date_key": past_date
-        }
-        resp = requests.post(f"{BASE_URL}/invoices", json=payload, headers=get_headers(emp1_token))
-        if resp.status_code == 200:
-            invoice = resp.json()
-            test_data["invoices"].append(invoice["id"])
-            if invoice.get("status") == "pending":
-                print(f"✓ PASS: Back-dated invoice created with status 'pending' (id: {invoice['id']})")
-                print(f"  Date: {invoice.get('date_key')}, Status: {invoice.get('status')}")
-                results["passed"] += 1
-                results["tests"].append({"test": "TEST 4", "status": "PASS", "details": "Back-dated employee invoice goes pending"})
-                
-                # Verify it appears in admin approvals
-                print("  Verifying invoice appears in admin approvals...")
-                resp_approvals = requests.get(f"{BASE_URL}/approvals", headers=get_headers(admin_token))
-                if resp_approvals.status_code == 200:
-                    approvals = resp_approvals.json()
-                    found = any(item["id"] == invoice["id"] and item["kind"] == "invoice" for item in approvals.get("items", []))
-                    if found:
-                        print(f"  ✓ Invoice appears in admin approvals queue")
-                    else:
-                        print(f"  ✗ WARNING: Invoice NOT found in admin approvals queue")
-                else:
-                    print(f"  ✗ WARNING: Failed to fetch approvals: {resp_approvals.status_code}")
-            else:
-                print(f"✗ FAIL: Invoice status is '{invoice.get('status')}', expected 'pending'")
-                results["failed"] += 1
-                results["tests"].append({"test": "TEST 4", "status": "FAIL", "details": f"Status is '{invoice.get('status')}' instead of 'pending'"})
-        else:
-            print(f"✗ FAIL: Failed to create invoice: {resp.status_code} {resp.text}")
-            results["failed"] += 1
-            results["tests"].append({"test": "TEST 4", "status": "FAIL", "details": f"API error: {resp.status_code}"})
-        print()
-        
-        # ========================================================================
-        # TEST 5: emp1 POST /api/receipts without date_key → status 'approved'
-        # ========================================================================
-        print("TEST 5: emp1 creates same-day receipt (no date_key) → status 'approved'")
-        print("-" * 80)
-        payload = {
-            "customer_name": "Approval Test Customer",
-            "customer_mobile": "9998887777",
-            "customer_id": customer_id,
-            "amount": 800,
-            "payment_mode": "cash",
-            "source_type": "other",
-            "notes": "Same-day receipt test"
-        }
-        resp = requests.post(f"{BASE_URL}/receipts", json=payload, headers=get_headers(emp1_token))
-        if resp.status_code == 200:
-            receipt = resp.json()
-            test_data["receipts"].append(receipt["id"])
-            if receipt.get("status") == "approved":
-                print(f"✓ PASS: Receipt created with status 'approved' (id: {receipt['id']})")
-                print(f"  Date: {receipt.get('date_key')}, Status: {receipt.get('status')}")
-                results["passed"] += 1
-                results["tests"].append({"test": "TEST 5", "status": "PASS", "details": "Same-day employee receipt auto-approved"})
-            else:
-                print(f"✗ FAIL: Receipt status is '{receipt.get('status')}', expected 'approved'")
-                results["failed"] += 1
-                results["tests"].append({"test": "TEST 5", "status": "FAIL", "details": f"Status is '{receipt.get('status')}' instead of 'approved'"})
-        else:
-            print(f"✗ FAIL: Failed to create receipt: {resp.status_code} {resp.text}")
-            results["failed"] += 1
-            results["tests"].append({"test": "TEST 5", "status": "FAIL", "details": f"API error: {resp.status_code}"})
-        print()
-        
-        # ========================================================================
-        # TEST 6: emp1 POST /api/receipts with past date_key → status 'pending'
-        # ========================================================================
-        print("TEST 6: emp1 creates back-dated receipt → status 'pending'")
-        print("-" * 80)
-        past_date = get_past_date(3)
-        payload = {
-            "customer_name": "Approval Test Customer",
-            "customer_mobile": "9998887777",
-            "customer_id": customer_id,
-            "amount": 1200,
-            "payment_mode": "cash",
-            "source_type": "other",
-            "notes": "Back-dated receipt test",
-            "date_key": past_date
-        }
-        resp = requests.post(f"{BASE_URL}/receipts", json=payload, headers=get_headers(emp1_token))
-        if resp.status_code == 200:
-            receipt = resp.json()
-            test_data["receipts"].append(receipt["id"])
-            if receipt.get("status") == "pending":
-                print(f"✓ PASS: Back-dated receipt created with status 'pending' (id: {receipt['id']})")
-                print(f"  Date: {receipt.get('date_key')}, Status: {receipt.get('status')}")
-                results["passed"] += 1
-                results["tests"].append({"test": "TEST 6", "status": "PASS", "details": "Back-dated employee receipt goes pending"})
-                
-                # Verify it appears in admin approvals
-                print("  Verifying receipt appears in admin approvals...")
-                resp_approvals = requests.get(f"{BASE_URL}/approvals", headers=get_headers(admin_token))
-                if resp_approvals.status_code == 200:
-                    approvals = resp_approvals.json()
-                    found = any(item["id"] == receipt["id"] and item["kind"] == "receipt" for item in approvals.get("items", []))
-                    if found:
-                        print(f"  ✓ Receipt appears in admin approvals queue")
-                    else:
-                        print(f"  ✗ WARNING: Receipt NOT found in admin approvals queue")
-                else:
-                    print(f"  ✗ WARNING: Failed to fetch approvals: {resp_approvals.status_code}")
-            else:
-                print(f"✗ FAIL: Receipt status is '{receipt.get('status')}', expected 'pending'")
-                results["failed"] += 1
-                results["tests"].append({"test": "TEST 6", "status": "FAIL", "details": f"Status is '{receipt.get('status')}' instead of 'pending'"})
-        else:
-            print(f"✗ FAIL: Failed to create receipt: {resp.status_code} {resp.text}")
-            results["failed"] += 1
-            results["tests"].append({"test": "TEST 6", "status": "FAIL", "details": f"API error: {resp.status_code}"})
-        print()
-        
-        # ========================================================================
-        # TEST 7: emp1 PATCH same-day sale (only notes) → status STAYS 'approved'
-        # ========================================================================
-        print("TEST 7: emp1 edits same-day sale (only notes) → status STAYS 'approved'")
-        print("-" * 80)
-        # Create a same-day sale first
-        payload = {
-            "customer_id": customer_id,
-            "customer_name": "Approval Test Customer",
-            "amount": 500,
-            "payment_mode": "cash",
-            "product": "Test Product for Edit",
-            "notes": "Original notes"
-        }
-        resp = requests.post(f"{BASE_URL}/sales", json=payload, headers=get_headers(emp1_token))
-        if resp.status_code == 200:
-            sale = resp.json()
-            test_data["sales"].append(sale["id"])
-            sale_id = sale["id"]
-            original_status = sale.get("status")
-            print(f"  Created sale {sale_id} with status '{original_status}'")
+            customer_id = customer["id"]
+            print(f"  Created customer {customer_id}")
             
-            # Now edit only the notes
-            patch_payload = {"notes": "Updated notes - same day edit"}
-            resp_patch = requests.patch(f"{BASE_URL}/sales/{sale_id}", json=patch_payload, headers=get_headers(emp1_token))
-            if resp_patch.status_code == 200:
-                updated_sale = resp_patch.json()
-                if updated_sale.get("status") == "approved":
-                    print(f"✓ PASS: Sale status STAYED 'approved' after same-day edit")
-                    print(f"  Original status: {original_status}, Updated status: {updated_sale.get('status')}")
-                    results["passed"] += 1
-                    results["tests"].append({"test": "TEST 7", "status": "PASS", "details": "Same-day edit keeps status approved"})
-                else:
-                    print(f"✗ FAIL: Sale status changed to '{updated_sale.get('status')}', expected 'approved'")
-                    results["failed"] += 1
-                    results["tests"].append({"test": "TEST 7", "status": "FAIL", "details": f"Status changed to '{updated_sale.get('status')}'"})
-            else:
-                print(f"✗ FAIL: Failed to patch sale: {resp_patch.status_code} {resp_patch.text}")
-                results["failed"] += 1
-                results["tests"].append({"test": "TEST 7", "status": "FAIL", "details": f"PATCH API error: {resp_patch.status_code}"})
-        else:
-            print(f"✗ FAIL: Failed to create sale for edit test: {resp.status_code} {resp.text}")
-            results["failed"] += 1
-            results["tests"].append({"test": "TEST 7", "status": "FAIL", "details": f"Setup failed: {resp.status_code}"})
-        print()
-        
-        # ========================================================================
-        # TEST 8: emp1 PATCH sale with past date_key → status becomes 'pending'
-        # ========================================================================
-        print("TEST 8: emp1 edits sale with back-dated date_key → status becomes 'pending'")
-        print("-" * 80)
-        # Create a same-day sale first
-        payload = {
-            "customer_id": customer_id,
-            "customer_name": "Approval Test Customer",
-            "amount": 600,
-            "payment_mode": "cash",
-            "product": "Test Product for Backdate Edit",
-            "notes": "Original notes"
-        }
-        resp = requests.post(f"{BASE_URL}/sales", json=payload, headers=get_headers(emp1_token))
-        if resp.status_code == 200:
-            sale = resp.json()
-            test_data["sales"].append(sale["id"])
-            sale_id = sale["id"]
-            original_status = sale.get("status")
-            print(f"  Created sale {sale_id} with status '{original_status}'")
-            
-            # Now edit with a past date
-            past_date = get_past_date(4)
-            patch_payload = {"date_key": past_date}
-            resp_patch = requests.patch(f"{BASE_URL}/sales/{sale_id}", json=patch_payload, headers=get_headers(emp1_token))
-            if resp_patch.status_code == 200:
-                updated_sale = resp_patch.json()
-                if updated_sale.get("status") == "pending":
-                    print(f"✓ PASS: Sale status changed to 'pending' after back-dating")
-                    print(f"  Original status: {original_status}, Updated status: {updated_sale.get('status')}")
-                    print(f"  Date changed to: {updated_sale.get('date_key')}")
-                    results["passed"] += 1
-                    results["tests"].append({"test": "TEST 8", "status": "PASS", "details": "Back-dating sale changes status to pending"})
-                else:
-                    print(f"✗ FAIL: Sale status is '{updated_sale.get('status')}', expected 'pending'")
-                    results["failed"] += 1
-                    results["tests"].append({"test": "TEST 8", "status": "FAIL", "details": f"Status is '{updated_sale.get('status')}' instead of 'pending'"})
-            else:
-                print(f"✗ FAIL: Failed to patch sale: {resp_patch.status_code} {resp_patch.text}")
-                results["failed"] += 1
-                results["tests"].append({"test": "TEST 8", "status": "FAIL", "details": f"PATCH API error: {resp_patch.status_code}"})
-        else:
-            print(f"✗ FAIL: Failed to create sale for backdate test: {resp.status_code} {resp.text}")
-            results["failed"] += 1
-            results["tests"].append({"test": "TEST 8", "status": "FAIL", "details": f"Setup failed: {resp.status_code}"})
-        print()
-        
-        # ========================================================================
-        # TEST 9: Admin POST /api/sales with past date_key → still 'approved'
-        # ========================================================================
-        print("TEST 9: Admin creates back-dated sale → status 'approved' (admin auto-approved)")
-        print("-" * 80)
-        past_date = get_past_date(10)
-        payload = {
-            "customer_id": customer_id,
-            "customer_name": "Approval Test Customer",
-            "amount": 3000,
-            "payment_mode": "cash",
-            "product": "Admin Test Product",
-            "notes": "Admin back-dated sale test",
-            "date_key": past_date
-        }
-        resp = requests.post(f"{BASE_URL}/sales", json=payload, headers=get_headers(admin_token))
-        if resp.status_code == 200:
-            sale = resp.json()
-            test_data["sales"].append(sale["id"])
-            if sale.get("status") == "approved":
-                print(f"✓ PASS: Admin back-dated sale created with status 'approved' (id: {sale['id']})")
-                print(f"  Date: {sale.get('date_key')}, Status: {sale.get('status')}")
-                results["passed"] += 1
-                results["tests"].append({"test": "TEST 9", "status": "PASS", "details": "Admin back-dated sale auto-approved"})
-            else:
-                print(f"✗ FAIL: Sale status is '{sale.get('status')}', expected 'approved'")
-                results["failed"] += 1
-                results["tests"].append({"test": "TEST 9", "status": "FAIL", "details": f"Admin sale status is '{sale.get('status')}' instead of 'approved'"})
-        else:
-            print(f"✗ FAIL: Failed to create admin sale: {resp.status_code} {resp.text}")
-            results["failed"] += 1
-            results["tests"].append({"test": "TEST 9", "status": "FAIL", "details": f"API error: {resp.status_code}"})
-        print()
-        
-        # ========================================================================
-        # TEST 10: emp1 POST /api/sales with FUTURE date_key → 400 error
-        # ========================================================================
-        print("TEST 10: emp1 creates sale with future date → 400 error (regression)")
-        print("-" * 80)
-        future_date = get_future_date(5)
-        payload = {
-            "customer_id": customer_id,
-            "customer_name": "Approval Test Customer",
-            "amount": 1500,
-            "payment_mode": "cash",
-            "product": "Future Test Product",
-            "notes": "Future date test",
-            "date_key": future_date
-        }
-        resp = requests.post(f"{BASE_URL}/sales", json=payload, headers=get_headers(emp1_token))
-        if resp.status_code == 400:
-            print(f"✓ PASS: Future date correctly rejected with 400 error")
-            print(f"  Error: {resp.json().get('detail', resp.text)}")
-            results["passed"] += 1
-            results["tests"].append({"test": "TEST 10", "status": "PASS", "details": "Future date validation working"})
-        else:
-            print(f"✗ FAIL: Expected 400 error, got {resp.status_code}")
-            if resp.status_code == 200:
-                sale = resp.json()
-                test_data["sales"].append(sale["id"])
-                print(f"  Sale was created with id {sale['id']} (should have been rejected)")
-            results["failed"] += 1
-            results["tests"].append({"test": "TEST 10", "status": "FAIL", "details": f"Got {resp.status_code} instead of 400"})
-        print()
-        
-        # ========================================================================
-        # TEST 11: Admin approve flow still works
-        # ========================================================================
-        print("TEST 11: Admin approve flow regression test")
-        print("-" * 80)
-        # Create a back-dated sale as emp1
-        past_date = get_past_date(2)
-        payload = {
-            "customer_id": customer_id,
-            "customer_name": "Approval Test Customer",
-            "amount": 700,
-            "payment_mode": "cash",
-            "product": "Approve Flow Test",
-            "notes": "Testing approve flow",
-            "date_key": past_date
-        }
-        resp = requests.post(f"{BASE_URL}/sales", json=payload, headers=get_headers(emp1_token))
-        if resp.status_code == 200:
-            sale = resp.json()
-            test_data["sales"].append(sale["id"])
-            sale_id = sale["id"]
-            print(f"  Created pending sale {sale_id}")
-            
-            # Admin approves it
-            resp_approve = requests.post(f"{BASE_URL}/approvals/sale/{sale_id}/approve", headers=get_headers(admin_token))
-            if resp_approve.status_code == 200:
-                approved_data = resp_approve.json()
-                if approved_data.get("approved"):
-                    print(f"✓ PASS: Admin successfully approved sale {sale_id}")
-                    results["passed"] += 1
-                    results["tests"].append({"test": "TEST 11", "status": "PASS", "details": "Admin approve flow working"})
-                else:
-                    print(f"✗ FAIL: Approve response doesn't show approved=true")
-                    results["failed"] += 1
-                    results["tests"].append({"test": "TEST 11", "status": "FAIL", "details": "Approve response incorrect"})
-            else:
-                print(f"✗ FAIL: Failed to approve sale: {resp_approve.status_code} {resp_approve.text}")
-                results["failed"] += 1
-                results["tests"].append({"test": "TEST 11", "status": "FAIL", "details": f"Approve API error: {resp_approve.status_code}"})
-        else:
-            print(f"✗ FAIL: Failed to create sale for approve test: {resp.status_code} {resp.text}")
-            results["failed"] += 1
-            results["tests"].append({"test": "TEST 11", "status": "FAIL", "details": f"Setup failed: {resp.status_code}"})
-        print()
-        
-        # ========================================================================
-        # TEST 12: GET /api/stats/sales-today counts approved same-day sale
-        # ========================================================================
-        print("TEST 12: GET /api/stats/sales-today counts approved same-day sale (regression)")
-        print("-" * 80)
-        # Get current count
-        resp_before = requests.get(f"{BASE_URL}/stats/sales-today?scope=all", headers=get_headers(admin_token))
-        if resp_before.status_code == 200:
-            stats_before = resp_before.json()
-            count_before = stats_before.get("count", 0)
-            print(f"  Sales count before: {count_before}")
-            
-            # Create a same-day sale as emp1
-            payload = {
-                "customer_id": customer_id,
-                "customer_name": "Approval Test Customer",
-                "amount": 999,
-                "payment_mode": "cash",
-                "product": "Stats Test Product",
-                "notes": "Testing stats counting"
-            }
-            resp = requests.post(f"{BASE_URL}/sales", json=payload, headers=get_headers(emp1_token))
-            if resp.status_code == 200:
-                sale = resp.json()
-                test_data["sales"].append(sale["id"])
-                print(f"  Created same-day sale {sale['id']} with status '{sale.get('status')}'")
+            # Get baseline totals
+            resp_before = requests.get(f"{BASE_URL}/admin/team-stats?period=today", headers=get_headers(admin_token))
+            if resp_before.status_code == 200:
+                totals_before = resp_before.json().get('totals', {})
+                revenue_before = totals_before.get('revenue', 0)
+                profit_before = totals_before.get('profit', 0)
+                print(f"  Baseline: revenue={revenue_before}, profit={profit_before}")
                 
-                # Get updated count
-                resp_after = requests.get(f"{BASE_URL}/stats/sales-today?scope=all", headers=get_headers(admin_token))
-                if resp_after.status_code == 200:
-                    stats_after = resp_after.json()
-                    count_after = stats_after.get("count", 0)
-                    print(f"  Sales count after: {count_after}")
+                # Create sale
+                sale_payload = {
+                    "customer_id": customer_id,
+                    "customer_name": "Team Stats Test Customer",
+                    "amount": 1000,
+                    "purchase_amount": 200,
+                    "payment_mode": "cash",
+                    "product": "Test Product",
+                    "notes": "Team stats test sale"
+                }
+                resp_sale = requests.post(f"{BASE_URL}/sales", json=sale_payload, headers=get_headers(emp1_token))
+                if resp_sale.status_code == 200:
+                    sale = resp_sale.json()
+                    test_data["sales"].append(sale["id"])
+                    print(f"  ✓ Created sale {sale['id']}")
                     
-                    if count_after == count_before + 1:
-                        print(f"✓ PASS: Same-day approved sale counted in stats")
-                        results["passed"] += 1
-                        results["tests"].append({"test": "TEST 12", "status": "PASS", "details": "Stats counting working correctly"})
+                    # Get updated totals
+                    resp_after = requests.get(f"{BASE_URL}/admin/team-stats?period=today", headers=get_headers(admin_token))
+                    if resp_after.status_code == 200:
+                        totals_after = resp_after.json().get('totals', {})
+                        revenue_after = totals_after.get('revenue', 0)
+                        profit_after = totals_after.get('profit', 0)
+                        print(f"  After: revenue={revenue_after}, profit={profit_after}")
+                        
+                        revenue_increase = revenue_after - revenue_before
+                        profit_increase = profit_after - profit_before
+                        
+                        if revenue_increase == 1000:
+                            print(f"  ✓ Revenue increased by 1000 (actual: {revenue_increase})")
+                        else:
+                            print(f"  ✗ Revenue increased by {revenue_increase}, expected 1000")
+                        
+                        if profit_increase == 800:
+                            print(f"  ✓ Profit increased by 800 (actual: {profit_increase})")
+                        else:
+                            print(f"  ✗ Profit increased by {profit_increase}, expected 800")
+                        
+                        if revenue_increase == 1000 and profit_increase == 800:
+                            print(f"✓ PASS: TEST (c)")
+                            results["passed"] += 1
+                            results["tests"].append({"test": "TEST (c)", "status": "PASS", "details": "Sale creation increases totals correctly"})
+                        else:
+                            print(f"✗ FAIL: TEST (c)")
+                            results["failed"] += 1
+                            results["tests"].append({"test": "TEST (c)", "status": "FAIL", "details": f"Revenue +{revenue_increase}, Profit +{profit_increase}"})
                     else:
-                        print(f"✗ FAIL: Count didn't increase by 1 (before: {count_before}, after: {count_after})")
+                        print(f"  ✗ Failed to get stats after: {resp_after.status_code}")
                         results["failed"] += 1
-                        results["tests"].append({"test": "TEST 12", "status": "FAIL", "details": f"Count mismatch: {count_before} -> {count_after}"})
+                        results["tests"].append({"test": "TEST (c)", "status": "FAIL", "details": "Stats fetch failed"})
                 else:
-                    print(f"✗ FAIL: Failed to get stats after: {resp_after.status_code}")
+                    print(f"  ✗ Failed to create sale: {resp_sale.status_code} {resp_sale.text}")
                     results["failed"] += 1
-                    results["tests"].append({"test": "TEST 12", "status": "FAIL", "details": f"Stats API error: {resp_after.status_code}"})
+                    results["tests"].append({"test": "TEST (c)", "status": "FAIL", "details": "Sale creation failed"})
             else:
-                print(f"✗ FAIL: Failed to create sale: {resp.status_code} {resp.text}")
+                print(f"  ✗ Failed to get baseline stats: {resp_before.status_code}")
                 results["failed"] += 1
-                results["tests"].append({"test": "TEST 12", "status": "FAIL", "details": f"Sale creation failed: {resp.status_code}"})
-        else:
-            print(f"✗ FAIL: Failed to get stats before: {resp_before.status_code}")
-            results["failed"] += 1
-            results["tests"].append({"test": "TEST 12", "status": "FAIL", "details": f"Stats API error: {resp_before.status_code}"})
+                results["tests"].append({"test": "TEST (c)", "status": "FAIL", "details": "Baseline stats fetch failed"})
         print()
         
         # ========================================================================
-        # TEST 13: Verify legitimate pending entries exist
+        # TEST (d): Create invoice as admin today → verify admin object and totals → DELETE
         # ========================================================================
-        print("TEST 13: Verify legitimate pending entries exist (DO NOT DELETE)")
+        print("TEST (d): Create invoice as admin today (items total 2000, unit_cost 500)")
         print("-" * 80)
-        resp_approvals = requests.get(f"{BASE_URL}/approvals", headers=get_headers(admin_token))
-        if resp_approvals.status_code == 200:
-            approvals = resp_approvals.json()
-            items = approvals.get("items", [])
-            
-            # Check for legitimate invoice
-            invoice_found = any(item["id"] == LEGITIMATE_PENDING["invoice"] and item["kind"] == "invoice" for item in items)
-            # Check for legitimate receipt
-            receipt_found = any(item["id"] == LEGITIMATE_PENDING["receipt"] and item["kind"] == "receipt" for item in items)
-            
-            if invoice_found and receipt_found:
-                print(f"✓ PASS: Both legitimate pending entries found in approvals queue")
-                print(f"  Invoice: {LEGITIMATE_PENDING['invoice']} (₹5000)")
-                print(f"  Receipt: {LEGITIMATE_PENDING['receipt']} (₹10000)")
-                results["passed"] += 1
-                results["tests"].append({"test": "TEST 13", "status": "PASS", "details": "Legitimate pending entries preserved"})
-            elif invoice_found:
-                print(f"⚠ PARTIAL: Invoice found but receipt missing")
-                print(f"  Invoice: {LEGITIMATE_PENDING['invoice']} found")
-                print(f"  Receipt: {LEGITIMATE_PENDING['receipt']} NOT found")
-                results["passed"] += 1
-                results["tests"].append({"test": "TEST 13", "status": "PARTIAL", "details": "Invoice found, receipt missing"})
-            elif receipt_found:
-                print(f"⚠ PARTIAL: Receipt found but invoice missing")
-                print(f"  Invoice: {LEGITIMATE_PENDING['invoice']} NOT found")
-                print(f"  Receipt: {LEGITIMATE_PENDING['receipt']} found")
-                results["passed"] += 1
-                results["tests"].append({"test": "TEST 13", "status": "PARTIAL", "details": "Receipt found, invoice missing"})
-            else:
-                print(f"⚠ WARNING: Neither legitimate pending entry found")
-                print(f"  This may be expected if they were already approved/deleted")
-                print(f"  Invoice: {LEGITIMATE_PENDING['invoice']} NOT found")
-                print(f"  Receipt: {LEGITIMATE_PENDING['receipt']} NOT found")
-                results["passed"] += 1
-                results["tests"].append({"test": "TEST 13", "status": "INFO", "details": "Legitimate entries not found (may be already processed)"})
-        else:
-            print(f"✗ FAIL: Failed to fetch approvals: {resp_approvals.status_code}")
+        
+        # Create test customer
+        customer2 = create_test_customer(admin_token, "Admin Invoice Test Customer", "9993334444")
+        if not customer2:
+            print("✗ Failed to create test customer")
             results["failed"] += 1
-            results["tests"].append({"test": "TEST 13", "status": "FAIL", "details": f"Approvals API error: {resp_approvals.status_code}"})
+            results["tests"].append({"test": "TEST (d)", "status": "FAIL", "details": "Customer creation failed"})
+        else:
+            customer2_id = customer2["id"]
+            print(f"  Created customer {customer2_id}")
+            
+            # Get baseline
+            resp_before = requests.get(f"{BASE_URL}/admin/team-stats?period=today", headers=get_headers(admin_token))
+            if resp_before.status_code == 200:
+                data_before = resp_before.json()
+                admin_before = data_before.get('admin', {})
+                totals_before = data_before.get('totals', {})
+                print(f"  Baseline admin: {admin_before}")
+                print(f"  Baseline totals: {totals_before}")
+                
+                # Create invoice
+                invoice_payload = {
+                    "customer_name": "Admin Invoice Test Customer",
+                    "customer_mobile": "9993334444",
+                    "customer_id": customer2_id,
+                    "items": [
+                        {
+                            "name": "Test Item",
+                            "qty": 1,
+                            "unit_price": 2000,
+                            "unit_cost": 500
+                        }
+                    ],
+                    "notes": "Admin team stats test invoice"
+                }
+                resp_invoice = requests.post(f"{BASE_URL}/invoices", json=invoice_payload, headers=get_headers(admin_token))
+                if resp_invoice.status_code == 200:
+                    invoice = resp_invoice.json()
+                    test_data["invoices"].append(invoice["id"])
+                    print(f"  ✓ Created invoice {invoice['id']}")
+                    
+                    # Get updated stats
+                    resp_after = requests.get(f"{BASE_URL}/admin/team-stats?period=today", headers=get_headers(admin_token))
+                    if resp_after.status_code == 200:
+                        data_after = resp_after.json()
+                        admin_after = data_after.get('admin', {})
+                        totals_after = data_after.get('totals', {})
+                        print(f"  After admin: {admin_after}")
+                        print(f"  After totals: {totals_after}")
+                        
+                        # Verify admin object
+                        admin_checks = []
+                        if admin_after.get('total_count') == admin_before.get('total_count', 0) + 1:
+                            print(f"  ✓ admin.total_count increased by 1")
+                            admin_checks.append(True)
+                        else:
+                            print(f"  ✗ admin.total_count = {admin_after.get('total_count')}, expected {admin_before.get('total_count', 0) + 1}")
+                            admin_checks.append(False)
+                        
+                        if admin_after.get('revenue') == admin_before.get('revenue', 0) + 2000:
+                            print(f"  ✓ admin.revenue increased by 2000")
+                            admin_checks.append(True)
+                        else:
+                            print(f"  ✗ admin.revenue = {admin_after.get('revenue')}, expected {admin_before.get('revenue', 0) + 2000}")
+                            admin_checks.append(False)
+                        
+                        if admin_after.get('profit') == admin_before.get('profit', 0) + 1500:
+                            print(f"  ✓ admin.profit increased by 1500")
+                            admin_checks.append(True)
+                        else:
+                            print(f"  ✗ admin.profit = {admin_after.get('profit')}, expected {admin_before.get('profit', 0) + 1500}")
+                            admin_checks.append(False)
+                        
+                        # Verify totals include admin
+                        totals_revenue_increase = totals_after.get('revenue', 0) - totals_before.get('revenue', 0)
+                        totals_profit_increase = totals_after.get('profit', 0) - totals_before.get('profit', 0)
+                        
+                        if totals_revenue_increase == 2000:
+                            print(f"  ✓ totals.revenue increased by 2000")
+                            admin_checks.append(True)
+                        else:
+                            print(f"  ✗ totals.revenue increased by {totals_revenue_increase}, expected 2000")
+                            admin_checks.append(False)
+                        
+                        if totals_profit_increase == 1500:
+                            print(f"  ✓ totals.profit increased by 1500")
+                            admin_checks.append(True)
+                        else:
+                            print(f"  ✗ totals.profit increased by {totals_profit_increase}, expected 1500")
+                            admin_checks.append(False)
+                        
+                        if all(admin_checks):
+                            print(f"✓ PASS: TEST (d)")
+                            results["passed"] += 1
+                            results["tests"].append({"test": "TEST (d)", "status": "PASS", "details": "Admin invoice increases admin object and totals correctly"})
+                        else:
+                            print(f"✗ FAIL: TEST (d)")
+                            results["failed"] += 1
+                            results["tests"].append({"test": "TEST (d)", "status": "FAIL", "details": "Admin object or totals mismatch"})
+                    else:
+                        print(f"  ✗ Failed to get stats after: {resp_after.status_code}")
+                        results["failed"] += 1
+                        results["tests"].append({"test": "TEST (d)", "status": "FAIL", "details": "Stats fetch failed"})
+                else:
+                    print(f"  ✗ Failed to create invoice: {resp_invoice.status_code} {resp_invoice.text}")
+                    results["failed"] += 1
+                    results["tests"].append({"test": "TEST (d)", "status": "FAIL", "details": "Invoice creation failed"})
+            else:
+                print(f"  ✗ Failed to get baseline stats: {resp_before.status_code}")
+                results["failed"] += 1
+                results["tests"].append({"test": "TEST (d)", "status": "FAIL", "details": "Baseline stats fetch failed"})
+        print()
+        
+        # ========================================================================
+        # TEST (e): emp1 GET /api/admin/team-stats → 403
+        # ========================================================================
+        print("TEST (e): emp1 GET /api/admin/team-stats → must be 403")
+        print("-" * 80)
+        resp = requests.get(f"{BASE_URL}/admin/team-stats", headers=get_headers(emp1_token))
+        if resp.status_code == 403:
+            print(f"✓ PASS: emp1 correctly blocked with 403")
+            results["passed"] += 1
+            results["tests"].append({"test": "TEST (e)", "status": "PASS", "details": "Non-admin correctly blocked"})
+        else:
+            print(f"✗ FAIL: Expected 403, got {resp.status_code}")
+            results["failed"] += 1
+            results["tests"].append({"test": "TEST (e)", "status": "FAIL", "details": f"Got {resp.status_code} instead of 403"})
+        print()
+        
+        # ========================================================================
+        # TEST (f): Regression checks
+        # ========================================================================
+        print("TEST (f): Regression checks")
+        print("-" * 80)
+        
+        # f.1: Rows still include all expected fields
+        resp = requests.get(f"{BASE_URL}/admin/team-stats", headers=get_headers(admin_token))
+        if resp.status_code == 200:
+            data = resp.json()
+            rows = data.get('rows', [])
+            if rows:
+                row = rows[0]
+                required_fields = [
+                    'calls', 'pct', 'attendance', 'check_in', 'check_out',
+                    'customers_total', 'daily_goal', 'is_custom_goal',
+                    'sales_count', 'invoices_count', 'total_count', 'revenue', 'profit'
+                ]
+                missing_fields = [f for f in required_fields if f not in row]
+                if not missing_fields:
+                    print(f"  ✓ Row includes all expected fields")
+                    results["passed"] += 1
+                    results["tests"].append({"test": "TEST (f.1)", "status": "PASS", "details": "All row fields present"})
+                else:
+                    print(f"  ✗ Row missing fields: {missing_fields}")
+                    results["failed"] += 1
+                    results["tests"].append({"test": "TEST (f.1)", "status": "FAIL", "details": f"Missing: {missing_fields}"})
+            else:
+                print(f"  ⚠ No rows returned (may be expected if no employees)")
+                results["passed"] += 1
+                results["tests"].append({"test": "TEST (f.1)", "status": "PASS", "details": "No rows (no employees)"})
+        else:
+            print(f"  ✗ Failed to get stats: {resp.status_code}")
+            results["failed"] += 1
+            results["tests"].append({"test": "TEST (f.1)", "status": "FAIL", "details": f"API error: {resp.status_code}"})
+        
+        # f.2: Invalid period falls back to 'today'
+        resp = requests.get(f"{BASE_URL}/admin/team-stats?period=xyz", headers=get_headers(admin_token))
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get('period') == 'today':
+                print(f"  ✓ Invalid period 'xyz' falls back to 'today'")
+                results["passed"] += 1
+                results["tests"].append({"test": "TEST (f.2)", "status": "PASS", "details": "Invalid period fallback working"})
+            else:
+                print(f"  ✗ Invalid period 'xyz' resulted in period='{data.get('period')}', expected 'today'")
+                results["failed"] += 1
+                results["tests"].append({"test": "TEST (f.2)", "status": "FAIL", "details": f"Period is '{data.get('period')}'"})
+        else:
+            print(f"  ✗ Failed to get stats: {resp.status_code}")
+            results["failed"] += 1
+            results["tests"].append({"test": "TEST (f.2)", "status": "FAIL", "details": f"API error: {resp.status_code}"})
         print()
         
     except Exception as e:
@@ -737,14 +580,14 @@ def print_summary(results: Dict):
         print("\nDETAILED RESULTS:")
         print("-" * 80)
         for test in results["tests"]:
-            status_symbol = "✓" if test["status"] == "PASS" else ("⚠" if test["status"] in ["PARTIAL", "INFO"] else "✗")
+            status_symbol = "✓" if test["status"] == "PASS" else "✗"
             print(f"{status_symbol} {test['test']}: {test['status']}")
             print(f"  {test['details']}")
         print("-" * 80)
     
     print("\n" + "="*80)
     if results["failed"] == 0:
-        print("✓ ALL TESTS PASSED - APPROVAL RULE CHANGE WORKING CORRECTLY")
+        print("✓ ALL TESTS PASSED - TEAM-STATS ENDPOINT WORKING CORRECTLY")
     else:
         print(f"✗ {results['failed']} TEST(S) FAILED - REVIEW REQUIRED")
     print("="*80 + "\n")

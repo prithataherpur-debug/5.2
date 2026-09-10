@@ -21,11 +21,38 @@ type TeamRow = {
   calls: number;
   pct: number;
   sales_count: number;
+  invoices_count: number;
+  total_count: number;
   revenue: number;
+  profit: number;
   attendance: "absent" | "active" | "done";
   check_in?: string | null;
   check_out?: string | null;
   customers_total: number;
+};
+
+type SalesCombo = {
+  sales_count: number;
+  invoices_count: number;
+  total_count: number;
+  revenue: number;
+  profit: number;
+};
+
+type PeriodKey = "today" | "week" | "month" | "all";
+
+const PERIODS: { key: PeriodKey; label: string }[] = [
+  { key: "today", label: "Today" },
+  { key: "week", label: "This week" },
+  { key: "month", label: "This month" },
+  { key: "all", label: "All time" },
+];
+
+const PERIOD_SUB: Record<PeriodKey, string> = {
+  today: "today's",
+  week: "this week's",
+  month: "this month's",
+  all: "all-time",
 };
 
 const ATT_META: Record<TeamRow["attendance"], { icon: keyof typeof Ionicons.glyphMap; color: string; label: string }> = {
@@ -40,6 +67,9 @@ export default function TeamScreen() {
   const { user, signOut } = useAuth();
   const [rows, setRows] = useState<TeamRow[]>([]);
   const [defaultGoal, setDefaultGoal] = useState(50);
+  const [period, setPeriod] = useState<PeriodKey>("today");
+  const [adminStats, setAdminStats] = useState<(SalesCombo & { username: string; display_name: string }) | null>(null);
+  const [grand, setGrand] = useState<SalesCombo>({ sales_count: 0, invoices_count: 0, total_count: 0, revenue: 0, profit: 0 });
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [edit, setEdit] = useState<TeamRow | null>(null);
@@ -48,25 +78,25 @@ export default function TeamScreen() {
 
   const load = useCallback(async () => {
     try {
-      const data = await api.teamStats();
+      const data = await api.teamStats(period);
       setRows(data.rows);
       setDefaultGoal(data.default_goal);
+      setAdminStats(data.admin);
+      setGrand(data.totals);
     } catch (e) { console.log(e); }
     finally { setLoading(false); setRefreshing(false); }
-  }, []);
+  }, [period]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { setLoading(true); load(); }, [load]);
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
   const totals = useMemo(() => {
     return rows.reduce(
       (acc, r) => ({
         calls: acc.calls + r.calls,
-        sales: acc.sales + r.sales_count,
-        revenue: acc.revenue + r.revenue,
         onDuty: acc.onDuty + (r.attendance === "active" ? 1 : 0),
       }),
-      { calls: 0, sales: 0, revenue: 0, onDuty: 0 },
+      { calls: 0, onDuty: 0 },
     );
   }, [rows]);
 
@@ -92,7 +122,7 @@ export default function TeamScreen() {
         </Pressable>
         <View style={{ flex: 1 }}>
           <Text style={styles.hdrTitle}>Team overview</Text>
-          <Text style={styles.hdrSub}>{rows.length} employees · today's snapshot</Text>
+          <Text style={styles.hdrSub}>{rows.length} employees · {PERIOD_SUB[period]} snapshot · {totals.onDuty}/{rows.length} on duty</Text>
         </View>
         <Pressable
           onPress={() => setAddOpen(true)}
@@ -120,15 +150,51 @@ export default function TeamScreen() {
             />
           }
           ListHeaderComponent={
-            <View style={styles.summaryCard}>
-              <View style={styles.summaryRow}>
-                <SummaryPill label="Calls today" value={String(totals.calls)} icon="call-outline" />
-                <SummaryPill label="Sales" value={String(totals.sales)} icon="cash-outline" />
+            <View>
+              <View style={styles.periodRow}>
+                {PERIODS.map((p) => (
+                  <Pressable
+                    key={p.key}
+                    onPress={() => setPeriod(p.key)}
+                    style={[styles.periodChip, period === p.key && styles.periodChipOn]}
+                    testID={`team-period-${p.key}`}
+                  >
+                    <Text style={[styles.periodChipText, period === p.key && styles.periodChipTextOn]}>{p.label}</Text>
+                  </Pressable>
+                ))}
               </View>
-              <View style={styles.summaryRow}>
-                <SummaryPill label="Revenue" value={`₹${totals.revenue.toLocaleString()}`} icon="trending-up-outline" wide />
-                <SummaryPill label="On duty" value={`${totals.onDuty}/${rows.length}`} icon="people-outline" />
+
+              <View style={styles.summaryCard}>
+                <View style={styles.summaryRow}>
+                  <SummaryPill
+                    label="Total sell"
+                    value={String(grand.total_count)}
+                    sub={`${grand.sales_count} sales · ${grand.invoices_count} invoices`}
+                    icon="bag-outline"
+                  />
+                  <SummaryPill label={period === "today" ? "Calls today" : "Calls"} value={String(totals.calls)} icon="call-outline" />
+                </View>
+                <View style={styles.summaryRow}>
+                  <SummaryPill label="Total revenue" value={`₹${grand.revenue.toLocaleString()}`} icon="trending-up-outline" wide />
+                  <SummaryPill label="Total profit" value={`₹${grand.profit.toLocaleString()}`} icon="wallet-outline" />
+                </View>
               </View>
+
+              {adminStats ? (
+                <View style={styles.adminCard} testID="team-admin-card">
+                  <View style={styles.adminAvatar}>
+                    <Ionicons name="shield-checkmark" size={18} color={theme.color.brand} />
+                  </View>
+                  <View style={{ flex: 1, marginLeft: theme.space.md }}>
+                    <Text style={styles.name}>{adminStats.display_name} (owner)</Text>
+                    <Text style={styles.sub}>{adminStats.sales_count} sales · {adminStats.invoices_count} invoices</Text>
+                  </View>
+                  <View style={{ alignItems: "flex-end" }}>
+                    <Text style={styles.adminSell}>{adminStats.total_count} sell</Text>
+                    <Text style={styles.adminRev}>₹{adminStats.revenue.toLocaleString()} · +₹{adminStats.profit.toLocaleString()}</Text>
+                  </View>
+                </View>
+              ) : null}
             </View>
           }
           renderItem={({ item }) => {
@@ -174,7 +240,7 @@ export default function TeamScreen() {
                     accent={item.is_custom_goal ? theme.color.brand : theme.color.onSurface}
                   />
                   <View style={styles.metricSep} />
-                  <Metric icon="cash-outline" label={String(item.sales_count)} sub="sales" />
+                  <Metric icon="bag-outline" label={String(item.total_count)} sub="sell" />
                   <View style={styles.metricSep} />
                   <Metric
                     icon="trending-up-outline"
@@ -182,7 +248,15 @@ export default function TeamScreen() {
                     sub="revenue"
                     accent={item.revenue > 0 ? theme.color.success : theme.color.onSurface}
                   />
+                  <View style={styles.metricSep} />
+                  <Metric
+                    icon="wallet-outline"
+                    label={`₹${item.profit.toLocaleString()}`}
+                    sub="profit"
+                    accent={item.profit > 0 ? theme.color.success : theme.color.onSurface}
+                  />
                 </View>
+                <Text style={styles.sellSplit}>{item.sales_count} sales · {item.invoices_count} invoices</Text>
 
                 <View style={styles.progressTrack}>
                   <View
@@ -239,7 +313,7 @@ export default function TeamScreen() {
   );
 }
 
-function SummaryPill({ label, value, icon, wide }: { label: string; value: string; icon: keyof typeof Ionicons.glyphMap; wide?: boolean }) {
+function SummaryPill({ label, value, icon, wide, sub }: { label: string; value: string; icon: keyof typeof Ionicons.glyphMap; wide?: boolean; sub?: string }) {
   return (
     <View style={[styles.pill, wide && { flex: 2 }]}>
       <View style={styles.pillIcon}>
@@ -248,6 +322,7 @@ function SummaryPill({ label, value, icon, wide }: { label: string; value: strin
       <View style={{ flex: 1 }}>
         <Text style={styles.pillLabel}>{label}</Text>
         <Text style={styles.pillValue}>{value}</Text>
+        {sub ? <Text style={styles.pillSub}>{sub}</Text> : null}
       </View>
     </View>
   );
@@ -761,6 +836,32 @@ const styles = StyleSheet.create({
     marginBottom: theme.space.md,
     gap: theme.space.sm,
   },
+  periodRow: { flexDirection: "row", gap: 8, marginBottom: theme.space.md },
+  periodChip: {
+    flex: 1, height: 36, borderRadius: theme.radius.pill,
+    borderWidth: 1, borderColor: theme.color.border,
+    backgroundColor: theme.color.surface,
+    alignItems: "center", justifyContent: "center",
+  },
+  periodChipOn: { backgroundColor: theme.color.brand, borderColor: theme.color.brand },
+  periodChipText: { fontSize: 12, fontWeight: "700", color: theme.color.muted },
+  periodChipTextOn: { color: "#fff" },
+  adminCard: {
+    flexDirection: "row", alignItems: "center",
+    padding: theme.space.md, borderRadius: theme.radius.md,
+    backgroundColor: "#FFF7ED",
+    borderWidth: 1, borderColor: "#FBD9A8",
+    marginBottom: theme.space.md,
+  },
+  adminAvatar: {
+    width: 44, height: 44, borderRadius: 22,
+    backgroundColor: "#FDE8D7",
+    alignItems: "center", justifyContent: "center",
+  },
+  adminSell: { fontSize: 14, fontWeight: "800", color: theme.color.onSurface },
+  adminRev: { fontSize: 11, fontWeight: "700", color: theme.color.muted, marginTop: 2 },
+  sellSplit: { fontSize: 11, color: theme.color.muted, marginTop: 6, textAlign: "center" },
+  pillSub: { fontSize: 10, color: theme.color.muted, marginTop: 1 },
   summaryRow: { flexDirection: "row", gap: theme.space.sm },
   pill: {
     flex: 1, flexDirection: "row", alignItems: "center", gap: 8,

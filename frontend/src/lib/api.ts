@@ -359,9 +359,10 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(patch),
     }),
-  teamStats: () =>
+  teamStats: (period?: "today" | "week" | "month" | "all") =>
     req<{
       date: string;
+      period: string;
       default_goal: number;
       rows: {
         id: string;
@@ -372,13 +373,32 @@ export const api = {
         calls: number;
         pct: number;
         sales_count: number;
+        invoices_count: number;
+        total_count: number;
         revenue: number;
+        profit: number;
         attendance: "absent" | "active" | "done";
         check_in?: string | null;
         check_out?: string | null;
         customers_total: number;
       }[];
-    }>(`/admin/team-stats`),
+      admin: {
+        username: string;
+        display_name: string;
+        sales_count: number;
+        invoices_count: number;
+        total_count: number;
+        revenue: number;
+        profit: number;
+      };
+      totals: {
+        sales_count: number;
+        invoices_count: number;
+        total_count: number;
+        revenue: number;
+        profit: number;
+      };
+    }>(`/admin/team-stats${period ? `?period=${period}` : ""}`),
   reassign: (customer_ids: string[], new_owner: string) =>
     req<{ updated: number }>(`/admin/reassign`, {
       method: "POST",

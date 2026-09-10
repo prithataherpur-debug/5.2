@@ -574,7 +574,8 @@ async def lifespan(app: FastAPI):
     await db.users.create_index("username", unique=True)
 
     # seed admin
-    if not await db.users.find_one({"username": ADMIN_USERNAME}):
+    fresh_install = not await db.users.find_one({"username": ADMIN_USERNAME})
+    if fresh_install:
         await db.users.insert_one({
             "id": str(uuid.uuid4()),
             "username": ADMIN_USERNAME,
@@ -584,18 +585,21 @@ async def lifespan(app: FastAPI):
             "created_at": now_iso(),
         })
 
-    # seed 7 employees
-    for i in range(1, 8):
-        u = f"emp{i}"
-        if not await db.users.find_one({"username": u}):
-            await db.users.insert_one({
-                "id": str(uuid.uuid4()),
-                "username": u,
-                "password_hash": hash_pw(DEFAULT_EMPLOYEE_PASSWORD),
-                "role": "employee",
-                "display_name": f"Employee {i}",
-                "created_at": now_iso(),
-            })
+    # Seed 7 starter employees on FIRST BOOT only. After that the admin owns
+    # employee management (Add / Remove in the Team screen) — deleted employees
+    # must NOT be re-created on restart.
+    if fresh_install:
+        for i in range(1, 8):
+            u = f"emp{i}"
+            if not await db.users.find_one({"username": u}):
+                await db.users.insert_one({
+                    "id": str(uuid.uuid4()),
+                    "username": u,
+                    "password_hash": hash_pw(DEFAULT_EMPLOYEE_PASSWORD),
+                    "role": "employee",
+                    "display_name": f"Employee {i}",
+                    "created_at": now_iso(),
+                })
 
     # backfill phone_norm on existing customers
     async for c in db.customers.find({"phone_norm": {"$exists": False}}, {"_id": 0, "id": 1, "phone": 1}):
@@ -909,47 +913,110 @@ async def admin_delete_user(
 
 
 @api_router.get("/admin/team-stats")
-async def admin_team_stats(_=Depends(admin_only)):
-    """Per-employee snapshot for today: calls, sales, revenue, attendance, goal."""
+async def admin_team_stats(period: str = "today", u=Depends(admin_only)):
+    """Per-employee performance snapshot.
+
+    period = today (default) | week (Mon-based) | month (calendar) | all — applies to
+    calls/sales/invoices aggregates. Attendance is always today's.
+
+    Each employee row has: calls, sales_count, invoices_count, total_count
+    (sales+invoices), revenue (sales+invoices), profit (sale profit + invoice profit).
+    Top-level `admin` = admin users' own combined numbers; `totals` = employees + admin
+    combined (the business-wide sell / revenue / profit the owner sees).
+    """
     day = today_key()
     settings = await get_settings_doc()
     default_goal = settings.get("daily_goal", 50)
+
+    period = (period or "today").lower()
+    today_d = datetime.now(timezone.utc).date()
+    if period == "week":
+        start_key: Optional[str] = (today_d - timedelta(days=today_d.weekday())).strftime("%Y-%m-%d")
+    elif period == "month":
+        start_key = today_d.replace(day=1).strftime("%Y-%m-%d")
+    elif period == "all":
+        start_key = None
+    else:
+        period = "today"
+        start_key = day
+
+    def dk_match() -> dict:
+        if start_key is None:
+            return {}
+        if period == "today":
+            return {"date_key": day}
+        return {"date_key": {"$gte": start_key}}
 
     users = await db.users.find(
         {"role": "employee"},
         {"_id": 0, "id": 1, "username": 1, "display_name": 1, "daily_goal": 1},
     ).sort("username", 1).to_list(50)
+    admins = await db.users.find(
+        {"role": "admin"},
+        {"_id": 0, "username": 1, "display_name": 1},
+    ).sort("username", 1).to_list(20)
 
-    # calls today per user
+    # calls per user (period-filtered)
     calls_agg = await db.call_logs.aggregate([
-        {"$match": {"date_key": day}},
+        {"$match": dk_match()},
         {"$group": {"_id": "$user", "total": {"$sum": 1}}},
     ]).to_list(200)
     calls_map = {row["_id"]: row["total"] for row in calls_agg}
 
-    # sales today per user
+    # sales per user (period-filtered) — count, revenue, purchase (COGS)
     sales_agg = await db.sales.aggregate([
-        {"$match": {"date_key": day}},
+        {"$match": dk_match()},
         {"$group": {
             "_id": "$user",
             "sales_count": {"$sum": 1},
             "revenue": {"$sum": "$amount"},
+            "purchase": {"$sum": {"$ifNull": ["$purchase_amount", 0]}},
         }},
     ]).to_list(200)
     sales_map = {row["_id"]: row for row in sales_agg}
 
-    # attendance today per user
+    # invoices per user (period-filtered) — count, revenue (total), cost_total
+    inv_agg = await db.invoices.aggregate([
+        {"$match": dk_match()},
+        {"$group": {
+            "_id": "$user",
+            "invoices_count": {"$sum": 1},
+            "revenue": {"$sum": "$total"},
+            "cost": {"$sum": {"$ifNull": ["$cost_total", 0]}},
+        }},
+    ]).to_list(200)
+    inv_map = {row["_id"]: row for row in inv_agg}
+
+    # attendance today per user (always daily)
     att_docs = await db.attendance.find(
         {"date_key": day},
         {"_id": 0, "user": 1, "check_in": 1, "check_out": 1},
     ).to_list(50)
     att_map = {a["user"]: a for a in att_docs}
 
-    # total assigned customers per user
+    # total assigned customers per user (all-time)
     cust_agg = await db.customers.aggregate([
         {"$group": {"_id": "$assigned_to", "count": {"$sum": 1}}},
     ]).to_list(200)
     cust_map = {row["_id"]: row["count"] for row in cust_agg}
+
+    def combo(uname: str) -> dict:
+        """Combined sales+invoices numbers for one user over the period."""
+        s = sales_map.get(uname, {})
+        iv = inv_map.get(uname, {})
+        sales_rev = float(s.get("revenue", 0.0))
+        inv_rev = float(iv.get("revenue", 0.0))
+        sale_profit = sales_rev - float(s.get("purchase", 0.0))
+        inv_profit = inv_rev - float(iv.get("cost", 0.0))
+        sales_count = int(s.get("sales_count", 0))
+        invoices_count = int(iv.get("invoices_count", 0))
+        return {
+            "sales_count": sales_count,
+            "invoices_count": invoices_count,
+            "total_count": sales_count + invoices_count,
+            "revenue": round(sales_rev + inv_rev, 2),
+            "profit": round(sale_profit + inv_profit, 2),
+        }
 
     rows = []
     for user in users:
@@ -964,8 +1031,8 @@ async def admin_team_stats(_=Depends(admin_only)):
             att_status = "active"
         else:
             att_status = "absent"
-        s = sales_map.get(uname, {})
-        total_calls = calls_map.get(uname, 0)
+        c = combo(uname)
+        total_calls = int(calls_map.get(uname, 0))
         rows.append({
             "id": user["id"],
             "username": uname,
@@ -974,15 +1041,43 @@ async def admin_team_stats(_=Depends(admin_only)):
             "is_custom_goal": bool(user.get("daily_goal")),
             "calls": total_calls,
             "pct": min(1.0, total_calls / user_goal) if user_goal else 0,
-            "sales_count": s.get("sales_count", 0),
-            "revenue": s.get("revenue", 0.0),
+            **c,
             "attendance": att_status,
             "check_in": att.get("check_in") if att else None,
             "check_out": att.get("check_out") if att else None,
             "customers_total": cust_map.get(uname, 0),
         })
 
-    return {"date": day, "default_goal": default_goal, "rows": rows}
+    # Admin's own numbers (all admin accounts combined)
+    admin_combo = {"sales_count": 0, "invoices_count": 0, "total_count": 0, "revenue": 0.0, "profit": 0.0}
+    for a in admins:
+        ca = combo(a["username"])
+        for k in ("sales_count", "invoices_count", "total_count"):
+            admin_combo[k] += ca[k]
+        admin_combo["revenue"] = round(admin_combo["revenue"] + ca["revenue"], 2)
+        admin_combo["profit"] = round(admin_combo["profit"] + ca["profit"], 2)
+    admin_label = admins[0].get("display_name") or admins[0]["username"] if admins else "Admin"
+
+    # Grand totals: every employee + admin combined
+    totals = {"sales_count": 0, "invoices_count": 0, "total_count": 0, "revenue": 0.0, "profit": 0.0}
+    for r in rows:
+        for k in ("sales_count", "invoices_count", "total_count"):
+            totals[k] += r[k]
+        totals["revenue"] = round(totals["revenue"] + r["revenue"], 2)
+        totals["profit"] = round(totals["profit"] + r["profit"], 2)
+    for k in ("sales_count", "invoices_count", "total_count"):
+        totals[k] += admin_combo[k]
+    totals["revenue"] = round(totals["revenue"] + admin_combo["revenue"], 2)
+    totals["profit"] = round(totals["profit"] + admin_combo["profit"], 2)
+
+    return {
+        "date": day,
+        "period": period,
+        "default_goal": default_goal,
+        "rows": rows,
+        "admin": {"username": admins[0]["username"] if admins else "", "display_name": admin_label, **admin_combo},
+        "totals": totals,
+    }
 
 @api_router.post("/admin/reassign")
 async def reassign(body: ReassignBody, _=Depends(admin_only)):
