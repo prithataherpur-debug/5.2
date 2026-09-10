@@ -243,7 +243,7 @@ class SaleBody(BaseModel):
     amount: float = Field(ge=0)
     cash_amount: Optional[float] = None
     online_amount: Optional[float] = None
-    payment_mode: Optional[str] = None  # cash | online | mixed (auto-derived if omitted)
+    payment_mode: Optional[str] = None  # cash | online | mixed | finance (auto-derived if omitted)
     currency: str = "INR"
     product: Optional[str] = ""
     notes: Optional[str] = ""
@@ -251,6 +251,8 @@ class SaleBody(BaseModel):
     attach_receipt_ids: List[str] = Field(default_factory=list)  # advance receipts to link to this sale
     advance_allocations: List[AdvanceAllocationIn] = Field(default_factory=list)  # partial advance amounts to apply
     date_key: Optional[str] = None  # back-dating (any past date; empty = today)
+    # FINANCE mode: Total = DP (down payment = cash_amount + online_amount) + DA (bank)
+    da_amount: Optional[float] = None  # Disbursement Amount — paid by finance co. to bank a/c
 
 
 class SalePatchBody(BaseModel):
@@ -264,6 +266,7 @@ class SalePatchBody(BaseModel):
     customer_name: Optional[str] = None
     customer_id: Optional[str] = None
     date_key: Optional[str] = None  # admin only
+    da_amount: Optional[float] = None  # finance mode: bank-disbursed amount (DA)
 
 
 class Sale(BaseModel):
@@ -275,7 +278,9 @@ class Sale(BaseModel):
     amount: float
     cash_amount: float = 0.0
     online_amount: float = 0.0
-    payment_mode: str = "cash"  # cash | online | mixed
+    payment_mode: str = "cash"  # cash | online | mixed | finance
+    da_amount: Optional[float] = None  # finance: Disbursement Amount (finance co. → bank a/c)
+    dp_amount: Optional[float] = None  # finance: Down Payment (= cash_amount + online_amount)
     purchase_amount: Optional[float] = None
     profit: float = 0.0
     currency: str
@@ -307,9 +312,10 @@ class InvoiceCreateBody(BaseModel):
     customer_id: Optional[str] = None
     attach_receipt_ids: List[str] = Field(default_factory=list)  # advance receipts to link to this invoice
     advance_allocations: List[AdvanceAllocationIn] = Field(default_factory=list)  # partial advance amounts to apply
-    cash_amount: Optional[float] = None    # explicit cash portion (customer pays in cash)
-    online_amount: Optional[float] = None  # explicit online portion
+    cash_amount: Optional[float] = None    # explicit cash portion (customer pays in cash); finance: DP cash part
+    online_amount: Optional[float] = None  # explicit online portion; finance: DP online part
     date_key: Optional[str] = None  # back-dating (any past date; empty = today)
+    da_amount: Optional[float] = None  # FINANCE: Disbursement Amount (bank); Total = DP (cash+online) + DA
 
 
 class InvoiceItem(BaseModel):
@@ -337,7 +343,9 @@ class Invoice(BaseModel):
     profit: float = 0.0
     cash_amount: float = 0.0
     online_amount: float = 0.0
-    payment_mode: str = "cash"  # cash | online | mixed
+    payment_mode: str = "cash"  # cash | online | mixed | finance
+    da_amount: Optional[float] = None  # finance: Disbursement Amount (finance co. → bank a/c)
+    dp_amount: Optional[float] = None  # finance: Down Payment (= cash_amount + online_amount)
     notes: str = ""
     sale_id: Optional[str] = None
     pdf_path: Optional[str] = None
@@ -3182,6 +3190,8 @@ def sale_from_doc(doc: dict) -> Sale:
         cash_amount=float(cash_amt or 0),
         online_amount=float(online_amt or 0),
         payment_mode=mode,
+        da_amount=doc.get("da_amount"),
+        dp_amount=doc.get("dp_amount"),
         purchase_amount=float(purchase) if purchase is not None else None,
         profit=profit,
         currency=doc.get("currency", "INR"),
@@ -3873,6 +3883,7 @@ class InvoiceUpdateBody(BaseModel):
     cash_amount: Optional[float] = None
     online_amount: Optional[float] = None
     date_key: Optional[str] = None
+    da_amount: Optional[float] = None  # FINANCE: Disbursement Amount (bank); Total = DP (cash+online) + DA
 
 
 @api_router.put("/invoices/{iid}", response_model=Invoice)
