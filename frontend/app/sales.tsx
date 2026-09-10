@@ -93,7 +93,7 @@ export default function SalesScreen() {
       if (Math.abs(c + o - n) > 0.01) { setOwnErr(`Cash ₹${c} + Online ₹${o} must equal amount ₹${n}`); return; }
       patch.cash_amount = c; patch.online_amount = o;
     }
-    if (isAdmin && ownDate.trim() && ownDate.trim() !== ownEdit.date_key) {
+    if (ownDate.trim() && ownDate.trim() !== ownEdit.date_key) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(ownDate.trim())) { setOwnErr("Date must be YYYY-MM-DD"); return; }
       patch.date_key = ownDate.trim();
     }
@@ -273,6 +273,12 @@ export default function SalesScreen() {
                   <Text style={styles.cardMeta}>
                     {isAdmin && item.display_name ? `${item.display_name} · ` : ""}{fmtDate(item.timestamp)}
                   </Text>
+                  {item.status === "pending" ? (
+                    <View style={styles.pendingPill} testID={`sale-pending-${item.id}`}>
+                      <Ionicons name="time-outline" size={10} color={theme.color.warning} />
+                      <Text style={styles.pendingPillText}>Pending review</Text>
+                    </View>
+                  ) : null}
                 </View>
                 <Text style={styles.cardAmount}>{fmtAmt(item.amount)}</Text>
                 {canEdit ? (
@@ -460,12 +466,8 @@ export default function SalesScreen() {
                   <TextInput value={ownOnline} onChangeText={setOwnOnline} keyboardType="decimal-pad" placeholder="Online ₹" placeholderTextColor={theme.color.muted} style={[styles.input, { flex: 1 }]} testID="own-online" />
                 </View>
               ) : null}
-              {isAdmin ? (
-                <>
-                  <Text style={styles.fieldLabel}>Sale date (YYYY-MM-DD) — admin only</Text>
-                  <TextInput value={ownDate} onChangeText={setOwnDate} placeholder="2026-01-31" placeholderTextColor={theme.color.muted} style={styles.input} testID="own-date" />
-                </>
-              ) : null}
+              <Text style={styles.fieldLabel}>Sale date (YYYY-MM-DD) — past dates allowed</Text>
+              <TextInput value={ownDate} onChangeText={setOwnDate} placeholder="2026-01-31" placeholderTextColor={theme.color.muted} style={styles.input} testID="own-date" />
               <Text style={styles.fieldLabel}>Product / service</Text>
               <TextInput
                 value={ownProduct}
@@ -566,6 +568,8 @@ const styles = StyleSheet.create({
   cardTitle: { fontSize: 15, fontWeight: "700", color: theme.color.onSurface },
   cardProduct: { fontSize: 13, color: theme.color.muted, fontWeight: "600" },
   cardMeta: { fontSize: 12, color: theme.color.muted, marginTop: 2 },
+  pendingPill: { flexDirection: "row", alignItems: "center", gap: 4, alignSelf: "flex-start", marginTop: 4, backgroundColor: "#FDF3D8", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10 },
+  pendingPillText: { fontSize: 10, fontWeight: "700", color: theme.color.warning },
   cardAmount: { fontSize: 18, fontWeight: "800", color: theme.color.success, marginLeft: theme.space.md },
   cardNotes: { marginTop: theme.space.sm, fontSize: 13, color: theme.color.onSurfaceTertiary },
   pnlRow: { flexDirection: "row", gap: theme.space.sm, marginTop: theme.space.sm, alignItems: "center", flexWrap: "wrap" },

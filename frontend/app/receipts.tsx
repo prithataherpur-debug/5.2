@@ -160,6 +160,12 @@ export default function ReceiptsScreen() {
                     {item.date_key} · {item.display_name || item.user} · {item.payment_mode.toUpperCase()}
                     {item.source_label ? `  ·  ${item.source_label}` : ""}
                   </Text>
+                  {item.status === "pending" ? (
+                    <View style={styles.pendingPill} testID={`rcpt-pending-${item.id}`}>
+                      <Ionicons name="time-outline" size={10} color={theme.color.warning} />
+                      <Text style={styles.pendingPillText}>Pending review</Text>
+                    </View>
+                  ) : null}
                   <View style={styles.refRow}>
                     {item.reference_no ? (
                       <View style={styles.refChip}>
@@ -172,7 +178,7 @@ export default function ReceiptsScreen() {
                         <Text style={[styles.refChipText, { color: "#B45309" }]}>ADVANCE</Text>
                       </View>
                     )}
-                    {isAdmin ? (
+                    {(isAdmin || item.user === user?.username) ? (
                       <Pressable onPress={() => setEditing(item)} style={styles.refEditBtn} testID={`rcpt-edit-${item.id}`} hitSlop={6}>
                         <Ionicons name="create-outline" size={11} color={theme.color.brand} />
                         <Text style={styles.refEditText}>Edit</Text>
@@ -256,6 +262,7 @@ function ReceiptEditor({
   const [refNo, setRefNo] = useState("");
   const [narration, setNarration] = useState("");
   const [notes, setNotes] = useState("");
+  const [dateKey, setDateKey] = useState("");  // optional back-date (YYYY-MM-DD, any past date)
   const [needsDelivery, setNeedsDelivery] = useState(false);
   const [deliveryDue, setDeliveryDue] = useState("");
   const [busy, setBusy] = useState(false);
@@ -278,6 +285,7 @@ function ReceiptEditor({
       setSourceId(editing.source_id || undefined);
       setRefNo(editing.reference_no || "");
       setNarration(editing.narration || ""); setNotes(editing.notes || ""); setErr("");
+      setDateKey(editing.date_key || "");
       setSrcInfo(null);
       return;
     }
@@ -289,6 +297,7 @@ function ReceiptEditor({
     setSourceId(prefill?.src_id);
     setRefNo("");
     setNarration(""); setNotes(""); setErr("");
+    setDateKey("");
     setSrcInfo(null);
   }, [visible, prefill, editing]);
 
@@ -367,6 +376,7 @@ function ReceiptEditor({
         reference_no: refNo.trim() || undefined,
         narration: narration.trim(),
         notes: notes.trim(),
+        date_key: dateKey.trim() || undefined,
         needs_delivery: !editing && needsDelivery ? true : undefined,
         delivery_due_date: !editing && needsDelivery && deliveryDue.trim() ? deliveryDue.trim() : undefined,
       };
@@ -569,6 +579,9 @@ function ReceiptEditor({
             <Text style={styles.label}>Notes (internal)</Text>
             <TextInput value={notes} onChangeText={setNotes} multiline placeholder="Anything for us to remember" placeholderTextColor={theme.color.muted} style={[styles.input, { minHeight: 60, textAlignVertical: "top" }]} testID="rcpt-notes" />
 
+            <Text style={styles.label}>Receipt date (optional — back-date)</Text>
+            <TextInput value={dateKey} onChangeText={setDateKey} placeholder="YYYY-MM-DD · empty = today" placeholderTextColor={theme.color.muted} style={styles.input} testID="rcpt-date" autoCapitalize="none" />
+
             {err ? <Text style={styles.err}>{err}</Text> : null}
 
             <Pressable onPress={submit} disabled={busy} style={[styles.saveBtn, busy && { opacity: 0.6 }]} testID="rcpt-save">
@@ -617,6 +630,8 @@ const styles = StyleSheet.create({
   cardNo: { fontSize: 11, fontWeight: "800", color: theme.color.brand, letterSpacing: 1, textTransform: "uppercase" },
   cardName: { fontSize: 15, fontWeight: "800", color: theme.color.onSurface, marginTop: 2 },
   cardMeta: { fontSize: 11, color: theme.color.muted, marginTop: 2 },
+  pendingPill: { flexDirection: "row", alignItems: "center", gap: 4, alignSelf: "flex-start", marginTop: 4, backgroundColor: "#FDF3D8", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10 },
+  pendingPillText: { fontSize: 10, fontWeight: "700", color: theme.color.warning },
   narration: { fontSize: 12, color: theme.color.onSurface, marginTop: 4, fontStyle: "italic" },
   cardAmt: { fontSize: 18, fontWeight: "900", color: theme.color.success },
   actionsRow: { flexDirection: "row", gap: 8 },

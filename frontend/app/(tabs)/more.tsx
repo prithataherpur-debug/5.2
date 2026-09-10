@@ -14,10 +14,14 @@ export default function More() {
   const { user, signOut } = useAuth();
   const isAdmin = user?.role === "admin";
   const [collectorUsername, setCollectorUsername] = useState<string | null>(null);
+  const [pendingCount, setPendingCount] = useState(0);
 
   useFocusEffect(useCallback(() => {
     api.getCollector().then((r) => setCollectorUsername(r.collector?.username || null)).catch(() => {});
-  }, []));
+    if (isAdmin) {
+      api.listApprovals().then((r) => setPendingCount(r.count || 0)).catch(() => {});
+    }
+  }, [isAdmin]));
 
   const isCollector = user?.username && collectorUsername === user.username;
   const showCollections = isAdmin || isCollector;
@@ -53,6 +57,7 @@ export default function More() {
           <>
             <Text style={styles.section}>ADMIN</Text>
             <View style={styles.group}>
+              <Row icon="checkmark-circle-outline" label="Pending approvals" onPress={() => router.push("/approvals")} testID="row-approvals" badge={pendingCount} />
               <Row icon="settings-outline" label="Settings & import" onPress={() => router.push("/settings")} testID="row-settings" />
               <Row icon="location-outline" label="Filter by area & assign" onPress={() => router.push("/admin")} testID="row-admin" />
               <Row icon="person-circle-outline" label="Manage team" onPress={() => router.push("/team")} testID="row-team" />
@@ -72,7 +77,7 @@ export default function More() {
   );
 }
 
-function Row({ icon, label, onPress, danger, testID }: { icon: keyof typeof Ionicons.glyphMap; label: string; onPress: () => void; danger?: boolean; testID?: string }) {
+function Row({ icon, label, onPress, danger, testID, badge }: { icon: keyof typeof Ionicons.glyphMap; label: string; onPress: () => void; danger?: boolean; testID?: string; badge?: number }) {
   return (
     <Pressable
       onPress={onPress}
@@ -83,6 +88,9 @@ function Row({ icon, label, onPress, danger, testID }: { icon: keyof typeof Ioni
         <Ionicons name={icon} size={20} color={danger ? theme.color.error : theme.color.brand} />
       </View>
       <Text style={[styles.rowLabel, danger && { color: theme.color.error }]}>{label}</Text>
+      {badge ? (
+        <View style={styles.badge}><Text style={styles.badgeText}>{badge}</Text></View>
+      ) : null}
       <Ionicons name="chevron-forward" size={18} color={theme.color.muted} />
     </Pressable>
   );
@@ -104,4 +112,6 @@ const styles = StyleSheet.create({
   row: { flexDirection: "row", alignItems: "center", padding: theme.space.md, borderBottomWidth: 1, borderBottomColor: theme.color.border },
   iconWrap: { width: 36, height: 36, borderRadius: 10, alignItems: "center", justifyContent: "center", marginRight: theme.space.md },
   rowLabel: { flex: 1, fontSize: theme.font.scale.lg, fontWeight: "600", color: theme.color.onSurface },
+  badge: { backgroundColor: theme.color.error, borderRadius: 10, minWidth: 20, height: 20, alignItems: "center", justifyContent: "center", paddingHorizontal: 6, marginRight: 8 },
+  badgeText: { color: "#fff", fontSize: 11, fontWeight: "800" },
 });

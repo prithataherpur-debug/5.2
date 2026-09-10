@@ -26,6 +26,7 @@ export default function PunchSaleModal({ visible, onClose, onSaved, presetCustom
   const [newAddress, setNewAddress] = useState("");
   const [dupCustomer, setDupCustomer] = useState<Customer | null>(null);
   const [amount, setAmount] = useState("");
+  const [dateKey, setDateKey] = useState("");  // optional back-date (YYYY-MM-DD, any past date)
   const [product, setProduct] = useState("");
   const [purchaseCost, setPurchaseCost] = useState("");
   const [notes, setNotes] = useState("");
@@ -46,6 +47,7 @@ export default function PunchSaleModal({ visible, onClose, onSaved, presetCustom
       setNewAddress("");
       setDupCustomer(null);
       setAmount("");
+      setDateKey("");
       setProduct("");
       setPurchaseCost("");
       setNotes("");
@@ -225,6 +227,7 @@ export default function PunchSaleModal({ visible, onClose, onSaved, presetCustom
         notes: notes.trim(),
         purchase_amount: purchaseVal,
         advance_allocations: allocations,
+        date_key: dateKey.trim() || undefined,
       });
       onSaved();
     } catch (e: any) {
@@ -459,6 +462,17 @@ export default function PunchSaleModal({ visible, onClose, onSaved, presetCustom
               style={styles.input}
               testID="sale-amount"
               returnKeyType="done"
+            />
+
+            <Text style={styles.label}>Sale date (optional — back-date)</Text>
+            <TextInput
+              value={dateKey}
+              onChangeText={setDateKey}
+              placeholder="YYYY-MM-DD · empty = today"
+              placeholderTextColor={theme.color.muted}
+              style={styles.input}
+              testID="sale-date"
+              autoCapitalize="none"
             />
 
             <Text style={styles.label}>Product / service</Text>

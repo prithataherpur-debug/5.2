@@ -142,6 +142,12 @@ export default function InvoicesScreen() {
                   <Text style={styles.cardMeta}>
                     {item.date_key} · {item.display_name || item.user} · {item.items.length} item{item.items.length > 1 ? "s" : ""}
                   </Text>
+                  {item.status === "pending" ? (
+                    <View style={styles.pendingPill} testID={`inv-pending-${item.id}`}>
+                      <Ionicons name="time-outline" size={10} color={theme.color.warning} />
+                      <Text style={styles.pendingPillText}>Pending review</Text>
+                    </View>
+                  ) : null}
                 </View>
                 <Text style={styles.cardAmt}>{fmt(item.total)}</Text>
               </View>
@@ -176,7 +182,7 @@ export default function InvoicesScreen() {
                     <Text style={styles.actionText}>Ledger</Text>
                   </Pressable>
                 ) : null}
-                {isAdmin ? (
+                {(isAdmin || item.user === user?.username) ? (
                   <Pressable onPress={() => setEditing(item)} style={styles.actionBtn} testID={`inv-edit-${item.id}`}>
                     <Ionicons name="create-outline" size={14} color={theme.color.brand} />
                     <Text style={styles.actionText}>Edit</Text>
@@ -269,6 +275,7 @@ function InvoiceEditor({
 }) {
   const [customer, setCustomer] = useState<PickerCustomer>({ customer_id: null, name: "", mobile: "", address: "" });
   const [notes, setNotes] = useState("");
+  const [dateKey, setDateKey] = useState("");  // optional back-date (YYYY-MM-DD, any past date)
   const [payMode, setPayMode] = useState<"cash" | "online" | "mixed">("cash");
   const [cashPart, setCashPart] = useState("");
   const [onlinePart, setOnlinePart] = useState("");
@@ -291,6 +298,7 @@ function InvoiceEditor({
         mobile: editing.customer_mobile || "", address: editing.customer_address || "",
       });
       setNotes(editing.notes || "");
+      setDateKey(editing.date_key || "");
       setItems((editing.items || []).map((it, i) => ({ id: `${i}-${Date.now()}`, name: it.name, qty: String(it.qty), rate: String(it.unit_price), cost: it.unit_cost ? String(it.unit_cost) : "" })));
       setPayMode((editing.payment_mode as any) || "cash");
       setCashPart(editing.payment_mode === "mixed" ? String(editing.cash_amount || "") : "");
@@ -300,6 +308,7 @@ function InvoiceEditor({
     }
     setCustomer({ customer_id: null, name: "", mobile: "", address: "" });
     setNotes("");
+    setDateKey("");
     setItems([{ id: String(Date.now()), name: "", qty: "1", rate: "", cost: "" }]);
     setPayMode("cash"); setCashPart(""); setOnlinePart("");
     setErr("");
@@ -445,6 +454,7 @@ function InvoiceEditor({
         items: cleanItems,
         cash_amount: cashAmt,
         online_amount: onlineAmt,
+        date_key: dateKey.trim() || undefined,
       };
       if (editing) {
         const inv = await api.replaceInvoice(editing.id, base);
@@ -680,6 +690,9 @@ function InvoiceEditor({
             <Text style={styles.label}>Notes (optional)</Text>
             <TextInput value={notes} onChangeText={setNotes} multiline placeholder="Additional details for the customer" placeholderTextColor={theme.color.muted} style={[styles.input, { minHeight: 60, textAlignVertical: "top" }]} testID="inv-notes" />
 
+            <Text style={styles.label}>Invoice date (optional — back-date)</Text>
+            <TextInput value={dateKey} onChangeText={setDateKey} placeholder="YYYY-MM-DD · empty = today" placeholderTextColor={theme.color.muted} style={styles.input} testID="inv-date" autoCapitalize="none" />
+
             {err ? <Text style={styles.err}>{err}</Text> : null}
 
             <Pressable onPress={submit} disabled={busy} style={[styles.saveBtn, busy && { opacity: 0.6 }]} testID="inv-save">
@@ -734,6 +747,8 @@ const styles = StyleSheet.create({
   cardNo: { fontSize: 11, fontWeight: "800", color: theme.color.brand, letterSpacing: 1, textTransform: "uppercase" },
   cardName: { fontSize: 15, fontWeight: "800", color: theme.color.onSurface, marginTop: 2 },
   cardMeta: { fontSize: 11, color: theme.color.muted, marginTop: 2 },
+  pendingPill: { flexDirection: "row", alignItems: "center", gap: 4, alignSelf: "flex-start", marginTop: 4, backgroundColor: "#FDF3D8", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10 },
+  pendingPillText: { fontSize: 10, fontWeight: "700", color: theme.color.warning },
   cardAmt: { fontSize: 18, fontWeight: "900", color: theme.color.success },
   actionsRow: { flexDirection: "row", gap: 8, flexWrap: "wrap" },
   actionBtn: {

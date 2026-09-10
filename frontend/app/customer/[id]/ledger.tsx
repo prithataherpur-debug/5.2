@@ -1,5 +1,5 @@
 import {
-  View, Text, StyleSheet, Pressable, ScrollView, ActivityIndicator, RefreshControl, Linking,
+  View, Text, StyleSheet, Pressable, ScrollView, ActivityIndicator, RefreshControl, Linking, Platform, Alert,
 } from "react-native";
 import { useCallback, useEffect, useState } from "react";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -8,6 +8,7 @@ import { Ionicons } from "@expo/vector-icons";
 
 import { theme } from "@/src/lib/theme";
 import { api } from "@/src/lib/api";
+import { useAuth } from "@/src/lib/auth";
 import CustomerEditModal from "@/src/components/CustomerEditModal";
 
 const fmt = (n: number) => "₹" + Math.round(n).toLocaleString("en-IN");
@@ -25,12 +26,15 @@ type LedgerData = Awaited<ReturnType<typeof api.getCustomerLedger>>;
 export default function CustomerLedgerScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
   const { id } = useLocalSearchParams<{ id: string }>();
   const [data, setData] = useState<LedgerData | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [err, setErr] = useState("");
   const [editOpen, setEditOpen] = useState(false);
+  const [busyId, setBusyId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -45,6 +49,32 @@ export default function CustomerLedgerScreen() {
 
   useEffect(() => { load(); }, [load]);
   useFocusEffect(useCallback(() => { load(); }, [load]));
+
+  // Admin-only: delete a sale / invoice / money-receipt straight from the ledger.
+  const deleteEntry = useCallback((kind: "sale" | "invoice" | "receipt", entryId: string, label: string) => {
+    const doDelete = async () => {
+      setBusyId(entryId);
+      try {
+        if (kind === "sale") await api.deleteSale(entryId);
+        else if (kind === "invoice") await api.deleteInvoice(entryId);
+        else await api.deleteReceipt(entryId);
+        await load();
+      } catch (e: any) {
+        setErr(String(e?.message || "Delete failed"));
+      } finally { setBusyId(null); }
+    };
+    const title = `Delete this ${kind}?`;
+    const msg = `${label}\nThis cannot be undone and will update the customer balance.`;
+    if (Platform.OS === "web") {
+      // eslint-disable-next-line no-alert
+      if (typeof window !== "undefined" && window.confirm(`${title}\n\n${msg}`)) doDelete();
+      return;
+    }
+    Alert.alert(title, msg, [
+      { text: "Cancel", style: "cancel" },
+      { text: "Delete", style: "destructive", onPress: doDelete },
+    ]);
+  }, [load]);
 
   const openPdf = (token?: string | null) => {
     if (!token) return;
@@ -192,7 +222,15 @@ export default function CustomerLedgerScreen() {
           </View>
         ) : (
           data.timeline.map((ev, idx) => (
-            <TimelineItem key={`${ev.kind}-${ev.id}`} ev={ev} isLast={idx === data.timeline.length - 1} onOpen={() => openPdf(ev.pdf_token)} />
+            <TimelineItem
+              key={`${ev.kind}-${ev.id}`}
+              ev={ev}
+              isLast={idx === data.timeline.length - 1}
+              onOpen={() => openPdf(ev.pdf_token)}
+              canDelete={isAdmin}
+              busy={busyId === ev.id}
+              onDelete={() => deleteEntry(ev.kind, ev.id, `${ev.title || ev.kind} · ${fmt(ev.amount)}`)}
+            />
           ))
         )}
       </ScrollView>
@@ -216,8 +254,9 @@ function CountTile({ icon, label, value }: { icon: keyof typeof Ionicons.glyphMa
   );
 }
 
-function TimelineItem({ ev, isLast, onOpen }: {
+function TimelineItem({ ev, isLast, onOpen, canDelete, busy, onDelete }: {
   ev: LedgerData["timeline"][number]; isLast: boolean; onOpen: () => void;
+  canDelete?: boolean; busy?: boolean; onDelete?: () => void;
 }) {
   const openToken = (token?: string | null) => {
     if (!token) return;
@@ -251,6 +290,21 @@ function TimelineItem({ ev, isLast, onOpen }: {
           <Text style={[styles.tlAmount, { color: kindMeta.color }]}>
             {kindMeta.sign}{fmt(ev.amount)}
           </Text>
+          {canDelete && onDelete ? (
+            <Pressable
+              onPress={onDelete}
+              disabled={busy}
+              style={styles.tlDelBtn}
+              testID={`ledger-del-${ev.kind}-${ev.id}`}
+              hitSlop={8}
+            >
+              {busy ? (
+                <ActivityIndicator size="small" color={theme.color.error} />
+              ) : (
+                <Ionicons name="trash-outline" size={15} color={theme.color.error} />
+              )}
+            </Pressable>
+          ) : null}
         </View>
         {ev.overdue ? (
           <Text style={styles.overdueHint}>No money receipt linked — treated as overdue</Text>
@@ -290,6 +344,10 @@ const styles = StyleSheet.create({
   tlPdfBtn: {
     marginTop: 8, alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: 6,
     height: 32, paddingHorizontal: 12, borderRadius: 16, backgroundColor: theme.color.brand,
+  },
+  tlDelBtn: {
+    marginLeft: 8, width: 30, height: 30, borderRadius: 15,
+    alignItems: "center", justifyContent: "center", backgroundColor: "#FDE8E6",
   },
   tlPdfBtnText: { color: "#fff", fontSize: 11, fontWeight: "800" },
   tlRcptChip: {

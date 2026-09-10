@@ -250,6 +250,7 @@ class SaleBody(BaseModel):
     purchase_amount: Optional[float] = None  # product cost / COGS entered at punch time
     attach_receipt_ids: List[str] = Field(default_factory=list)  # advance receipts to link to this sale
     advance_allocations: List[AdvanceAllocationIn] = Field(default_factory=list)  # partial advance amounts to apply
+    date_key: Optional[str] = None  # back-dating (any past date; empty = today)
 
 
 class SalePatchBody(BaseModel):
@@ -286,6 +287,7 @@ class Sale(BaseModel):
     invoice_id: Optional[str] = None
     invoice_no: Optional[str] = None
     linked_receipts: List[dict] = Field(default_factory=list)
+    status: str = "approved"  # pending | approved (employee entries start pending; admin auto-approved)
 
 
 # ---------- Invoice models ----------
@@ -307,6 +309,7 @@ class InvoiceCreateBody(BaseModel):
     advance_allocations: List[AdvanceAllocationIn] = Field(default_factory=list)  # partial advance amounts to apply
     cash_amount: Optional[float] = None    # explicit cash portion (customer pays in cash)
     online_amount: Optional[float] = None  # explicit online portion
+    date_key: Optional[str] = None  # back-dating (any past date; empty = today)
 
 
 class InvoiceItem(BaseModel):
@@ -344,6 +347,7 @@ class Invoice(BaseModel):
     advance_applied: float = 0.0
     balance_due: Optional[float] = None
     linked_receipts: List[dict] = Field(default_factory=list)
+    status: str = "approved"  # pending | approved (employee entries start pending; admin auto-approved)
 
 
 # ---------- Money Receipt models ----------
@@ -366,6 +370,7 @@ class ReceiptCreateBody(BaseModel):
     notes: Optional[str] = ""
     needs_delivery: bool = False  # advance paid, product to be delivered later
     delivery_due_date: Optional[str] = None  # YYYY-MM-DD; defaults to today+2 when needs_delivery
+    date_key: Optional[str] = None  # back-dating (any past date; empty = today)
 
 
 class ReceiptPatchBody(BaseModel):
@@ -408,6 +413,7 @@ class MoneyReceipt(BaseModel):
     allocations: List[dict] = Field(default_factory=list)
     allocated: float = 0.0
     remaining: float = 0.0
+    status: str = "approved"  # pending | approved (employee entries start pending; admin auto-approved)
 
 
 class DeliveryPatchBody(BaseModel):
@@ -2572,6 +2578,22 @@ async def acknowledge_reconciliation(body: ReconcileAckBody, u=Depends(admin_onl
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
+def _backdate_key(v: Optional[str]) -> str:
+    """Back-dating helper: empty → today; any PAST date allowed; future dates rejected."""
+    s = (v or "").strip()
+    if not s:
+        return today_key()
+    if not DATE_RE.match(s):
+        raise HTTPException(400, "date must be YYYY-MM-DD")
+    try:
+        datetime.strptime(s, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(400, "Invalid date")
+    if s > today_key():
+        raise HTTPException(400, "Back-dating to a future date is not allowed")
+    return s
+
+
 def _date_range(from_date: str, to_date: str) -> List[str]:
     a = datetime.strptime(from_date, "%Y-%m-%d").date()
     b = datetime.strptime(to_date, "%Y-%m-%d").date()
@@ -3069,6 +3091,7 @@ def sale_from_doc(doc: dict) -> Sale:
         source=doc.get("source", "manual"),
         invoice_id=doc.get("invoice_id"),
         invoice_no=doc.get("invoice_no"),
+        status=doc.get("status", "approved"),
     )
 
 
@@ -3141,8 +3164,9 @@ async def create_sale(body: SaleBody, u=Depends(current_user)):
         "currency": body.currency or "INR",
         "product": body.product or "",
         "notes": body.notes or "",
-        "date_key": today_key(),
+        "date_key": _backdate_key(body.date_key),
         "timestamp": now_iso(),
+        "status": "approved" if u["role"] == "admin" else "pending",
     }
     await db.sales.insert_one(doc)
     doc.pop("_id", None)
@@ -3301,11 +3325,7 @@ async def patch_sale(sid: str, body: SalePatchBody, u=Depends(current_user)):
     if body.customer_id is not None:
         upd["customer_id"] = body.customer_id or None
     if body.date_key is not None:
-        if not is_admin:
-            raise HTTPException(403, "Only admin can change the sale date")
-        if not DATE_RE.match(body.date_key.strip()):
-            raise HTTPException(400, "date_key must be YYYY-MM-DD")
-        upd["date_key"] = body.date_key.strip()
+        upd["date_key"] = _backdate_key(body.date_key)  # owner or admin may back-date (any past date)
     # Cash / online split — keep amount == cash + online
     if body.cash_amount is not None or body.online_amount is not None:
         cash = float(body.cash_amount if body.cash_amount is not None else existing.get("cash_amount") or 0)
@@ -3327,6 +3347,8 @@ async def patch_sale(sid: str, body: SalePatchBody, u=Depends(current_user)):
         raise HTTPException(400, "No changes")
     upd["updated_at"] = now_iso()
     upd["updated_by"] = u["username"]
+    if not is_admin:
+        upd["status"] = "pending"  # employee edits re-flag the entry for admin review
     doc = await db.sales.find_one_and_update(
         {"id": sid}, {"$set": upd}, return_document=True, projection={"_id": 0},
     )
@@ -3581,7 +3603,7 @@ async def create_invoice(body: InvoiceCreateBody, u=Depends(current_user)):
     inv_id = str(uuid.uuid4())
     invoice_no = await _next_doc_number("invoice")
     now = now_iso()
-    date_key = today_key()
+    date_key = _backdate_key(body.date_key)
 
     # Payment split (cash + online). Default: entire amount is cash.
     cash_amt = body.cash_amount if body.cash_amount is not None else None
@@ -3663,6 +3685,7 @@ async def create_invoice(body: InvoiceCreateBody, u=Depends(current_user)):
         "created_at": now,
         "advance_applied": advance_applied,
         "balance_due": balance_due,
+        "status": "approved" if u["role"] == "admin" else "pending",
     }
     await db.invoices.insert_one(doc)
 
@@ -3750,11 +3773,13 @@ class InvoiceUpdateBody(BaseModel):
 
 
 @api_router.put("/invoices/{iid}", response_model=Invoice)
-async def replace_invoice(iid: str, body: InvoiceUpdateBody, u=Depends(admin_only)):
-    """Admin: edit every field of an invoice and regenerate its PDF (same invoice number)."""
+async def replace_invoice(iid: str, body: InvoiceUpdateBody, u=Depends(current_user)):
+    """Owner or admin: edit every field of an invoice and regenerate its PDF (same invoice number)."""
     doc = await db.invoices.find_one({"id": iid}, {"_id": 0})
     if not doc:
         raise HTTPException(404, "Not found")
+    if u["role"] != "admin" and doc.get("user") != u["username"]:
+        raise HTTPException(403, "You can only edit your own invoices")
     if not body.customer_name.strip():
         raise HTTPException(400, "Customer name is required")
     if not body.items:
@@ -3828,6 +3853,7 @@ async def replace_invoice(iid: str, body: InvoiceUpdateBody, u=Depends(admin_onl
         "cash_amount": cash_amt, "online_amount": online_amt, "payment_mode": pay_mode,
         "notes": notes, "pdf_path": pdf_path, "date_key": date_key,
         "updated_at": now_iso(), "updated_by": u["username"],
+        "status": "approved" if u["role"] == "admin" else "pending",  # employee edits re-flag for review
     }
     await db.invoices.update_one({"id": iid}, {"$set": upd})
     # Keep linked receipts' reference/label in sync (invoice number unchanged, customer may have changed)
@@ -3995,7 +4021,7 @@ async def create_receipt(body: ReceiptCreateBody, u=Depends(current_user)):
     receipt_no = await _next_doc_number("receipt")
     rid = str(uuid.uuid4())
     now = now_iso()
-    date_key = today_key()
+    date_key = _backdate_key(body.date_key)
     src_label = await _resolve_source_label(st, body.source_id)
     display = await _display_name_for(u["username"])
 
@@ -4065,6 +4091,7 @@ async def create_receipt(body: ReceiptCreateBody, u=Depends(current_user)):
         "delivery_due_date": delivery_due_date,
         "delivered_at": None,
         "delivery_note": "",
+        "status": "approved" if u["role"] == "admin" else "pending",
     }
     await db.receipts.insert_one(doc)
     doc["display_name"] = display
@@ -4330,11 +4357,13 @@ async def delete_receipt(rid: str, _=Depends(admin_only)):
 
 
 @api_router.patch("/receipts/{rid}", response_model=MoneyReceipt)
-async def update_receipt(rid: str, body: ReceiptPatchBody, u=Depends(admin_only)):
-    """Admin can edit reference_no / source_type / source_id / narration / notes."""
+async def update_receipt(rid: str, body: ReceiptPatchBody, u=Depends(current_user)):
+    """Owner or admin can edit reference_no / source_type / source_id / narration / notes."""
     doc = await db.receipts.find_one({"id": rid}, {"_id": 0})
     if not doc:
         raise HTTPException(404, "Not found")
+    if u["role"] != "admin" and doc.get("user") != u["username"]:
+        raise HTTPException(403, "You can only edit your own receipts")
     upd: dict = {}
     if body.source_type is not None:
         st = (body.source_type or "other").lower()
@@ -4351,6 +4380,8 @@ async def update_receipt(rid: str, body: ReceiptPatchBody, u=Depends(admin_only)
         upd["notes"] = body.notes.strip()
     if not upd:
         raise HTTPException(400, "No changes")
+    if u["role"] != "admin":
+        upd["status"] = "pending"  # employee edits re-flag the entry for admin review
     # Recompute source_label if source_type/source_id changed
     if "source_type" in upd or "source_id" in upd:
         new_st = upd.get("source_type", doc.get("source_type", "other"))
@@ -4385,11 +4416,13 @@ class ReceiptUpdateBody(BaseModel):
 
 
 @api_router.put("/receipts/{rid}", response_model=MoneyReceipt)
-async def replace_receipt(rid: str, body: ReceiptUpdateBody, u=Depends(admin_only)):
-    """Admin: edit every field of a money receipt and regenerate its PDF (same receipt number)."""
+async def replace_receipt(rid: str, body: ReceiptUpdateBody, u=Depends(current_user)):
+    """Owner or admin: edit every field of a money receipt and regenerate its PDF (same receipt number)."""
     doc = await db.receipts.find_one({"id": rid}, {"_id": 0})
     if not doc:
         raise HTTPException(404, "Not found")
+    if u["role"] != "admin" and doc.get("user") != u["username"]:
+        raise HTTPException(403, "You can only edit your own receipts")
     if not body.customer_name.strip():
         raise HTTPException(400, "Customer name is required")
     st = (body.source_type or "other").lower()
@@ -4459,6 +4492,7 @@ async def replace_receipt(rid: str, body: ReceiptUpdateBody, u=Depends(admin_onl
         "narration": (body.narration or "").strip(), "notes": (body.notes or "").strip(),
         "pdf_path": pdf_path, "date_key": date_key,
         "updated_at": now_iso(), "updated_by": u["username"],
+        "status": "approved" if u["role"] == "admin" else "pending",  # employee edits re-flag for review
     }
     await db.receipts.update_one({"id": rid}, {"$set": upd})
     fresh = await db.receipts.find_one({"id": rid}, {"_id": 0})
@@ -4471,6 +4505,67 @@ async def replace_receipt(rid: str, body: ReceiptUpdateBody, u=Depends(admin_onl
 @api_router.get("/receipts/advances-legacy-removed", include_in_schema=False)
 async def _list_advance_receipts_legacy(_=Depends(current_user)):
     raise HTTPException(410, "Use /api/receipts/advances")
+
+
+# ---------- Approvals (admin review of employee entries) ----------
+KIND_TO_COLL = {"sale": "sales", "invoice": "invoices", "receipt": "receipts"}
+
+
+@api_router.get("/approvals")
+async def list_pending_approvals(u=Depends(admin_only)):
+    """All employee-created entries awaiting admin review across sales/invoices/receipts.
+    NOTE: pending entries still COUNT in totals/reports — approval is only a review flag."""
+    items: List[dict] = []
+    for kind, coll in KIND_TO_COLL.items():
+        docs = await db[coll].find({"status": "pending"}, {"_id": 0}).to_list(1000)
+        for d in docs:
+            items.append({
+                "kind": kind,
+                "id": d["id"],
+                "doc_no": d.get("invoice_no") or d.get("receipt_no") or "",
+                "customer_name": d.get("customer_name") or "",
+                "customer_mobile": d.get("customer_mobile") or "",
+                "amount": float(d.get("total") if kind == "invoice" else (d.get("amount") or 0)),
+                "payment_mode": d.get("payment_mode") or "cash",
+                "user": d.get("user") or "",
+                "date_key": d.get("date_key") or "",
+                "created_at": d.get("created_at") or d.get("timestamp") or "",
+                "notes": d.get("notes") or "",
+                "pdf_token": _make_media_token(d["pdf_path"]) if d.get("pdf_path") else None,
+            })
+    items.sort(key=lambda x: x["created_at"], reverse=True)
+    for it in items:
+        it["display_name"] = await _display_name_for(it["user"])
+    return {"count": len(items), "items": items}
+
+
+@api_router.post("/approvals/{kind}/{eid}/approve")
+async def approve_entry(kind: str, eid: str, u=Depends(admin_only)):
+    coll = KIND_TO_COLL.get(kind)
+    if not coll:
+        raise HTTPException(400, "kind must be sale | invoice | receipt")
+    res = await db[coll].update_one(
+        {"id": eid, "status": "pending"},
+        {"$set": {"status": "approved", "approved_by": u["username"], "approved_at": now_iso()}},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(404, "Pending entry not found")
+    return {"approved": True, "kind": kind, "id": eid}
+
+
+@api_router.post("/approvals/{kind}/{eid}/reject")
+async def reject_entry(kind: str, eid: str, u=Depends(admin_only)):
+    """Reject = DELETE the entry (same semantics as the admin delete endpoints)."""
+    coll = KIND_TO_COLL.get(kind)
+    if not coll:
+        raise HTTPException(400, "kind must be sale | invoice | receipt")
+    d = await db[coll].find_one({"id": eid, "status": "pending"}, {"_id": 0})
+    if not d:
+        raise HTTPException(404, "Pending entry not found")
+    if kind == "invoice" and d.get("sale_id"):
+        await db.sales.delete_one({"id": d["sale_id"]})
+    await db[coll].delete_one({"id": eid})
+    return {"deleted": True, "kind": kind, "id": eid}
 
 
 # ---------- Expenses (admin only) ----------

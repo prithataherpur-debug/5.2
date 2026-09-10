@@ -131,6 +131,7 @@ export type Sale = {
   invoice_id?: string | null;
   invoice_no?: string | null;
   linked_receipts?: LinkedReceipt[];
+  status?: string;  // "pending" | "approved"
 };
 
 export type PreviewRow = {
@@ -198,6 +199,7 @@ export type Invoice = {
   advance_applied?: number;
   balance_due?: number | null;
   linked_receipts?: LinkedReceipt[];
+  status?: string;  // "pending" | "approved"
 };
 
 export type MoneyReceipt = {
@@ -233,6 +235,23 @@ export type MoneyReceipt = {
   remaining?: number;
   /** Daybook only: true = counted as fresh money in grand total; false = informational (linked to a source counted today) */
   counted_standalone?: boolean;
+  status?: string;  // "pending" | "approved"
+};
+
+export type ApprovalItem = {
+  kind: "sale" | "invoice" | "receipt";
+  id: string;
+  doc_no: string;
+  customer_name: string;
+  customer_mobile: string;
+  amount: number;
+  payment_mode: string;
+  user: string;
+  display_name?: string | null;
+  date_key: string;
+  created_at: string;
+  notes: string;
+  pdf_token?: string | null;
 };
 
 export type AdvanceAllocationIn = { receipt_id: string; amount: number };
@@ -514,6 +533,7 @@ export const api = {
     attach_receipt_ids?: string[];
     advance_allocations?: AdvanceAllocationIn[];
     cash_amount?: number; online_amount?: number;
+    date_key?: string;
   }) => req<Invoice>(`/invoices`, { method: "POST", body: JSON.stringify(body) }),
   getInvoice: (id: string) => req<Invoice>(`/invoices/${id}`),
   replaceInvoice: (id: string, body: {
@@ -548,6 +568,7 @@ export const api = {
     narration?: string; notes?: string;
     customer_id?: string;
     needs_delivery?: boolean; delivery_due_date?: string;
+    date_key?: string;
   }) => req<MoneyReceipt>(`/receipts`, { method: "POST", body: JSON.stringify(body) }),
   updateReceipt: (id: string, body: {
     reference_no?: string; source_type?: "sale" | "invoice" | "collection" | "other";
@@ -654,6 +675,7 @@ export const api = {
     purchase_amount?: number;
     attach_receipt_ids?: string[];
     advance_allocations?: AdvanceAllocationIn[];
+    date_key?: string;
   }) =>
     req<Sale>(`/sales`, { method: "POST", body: JSON.stringify(payload) }),
   deleteSale: (id: string) => req<{ deleted: boolean }>(`/sales/${id}`, { method: "DELETE" }),
@@ -674,6 +696,14 @@ export const api = {
     id: string,
     body: { mark_delivered?: boolean; reopen?: boolean; delivery_due_date?: string; delivery_note?: string },
   ) => req<Delivery>(`/deliveries/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+
+  // ---- Approvals (admin review of employee entries) ----
+  listApprovals: () =>
+    req<{ count: number; items: ApprovalItem[] }>(`/approvals`),
+  approveEntry: (kind: "sale" | "invoice" | "receipt", id: string) =>
+    req<{ approved: boolean }>(`/approvals/${kind}/${id}/approve`, { method: "POST" }),
+  rejectEntry: (kind: "sale" | "invoice" | "receipt", id: string) =>
+    req<{ deleted: boolean }>(`/approvals/${kind}/${id}/reject`, { method: "POST" }),
 };
 
 export type Delivery = {
