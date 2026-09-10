@@ -3662,6 +3662,8 @@ async def list_invoices(limit: int = 100, user: Optional[str] = None, date: Opti
                 "reference_no": r.get("reference_no") or "",
                 "pdf_token": _make_media_token(r["pdf_path"]) if r.get("pdf_path") else None,
             })
+    # Advances applied (partially or fully) to these invoices
+    alloc_by_inv = await _alloc_linked_by_target(ids, "invoice")
     for d in docs:
         uname = d["user"]
         if uname not in name_cache:
@@ -3669,7 +3671,9 @@ async def list_invoices(limit: int = 100, user: Optional[str] = None, date: Opti
         d["display_name"] = name_cache[uname]
         if d.get("pdf_path"):
             d["pdf_token"] = _make_media_token(d["pdf_path"])
-        d["linked_receipts"] = receipts_by_src.get(d["id"], [])
+        base = receipts_by_src.get(d["id"], [])
+        extra = alloc_by_inv.get(d["id"], [])
+        d["linked_receipts"] = base + extra
         out.append(Invoice(**d))
     return out
 
@@ -4081,13 +4085,26 @@ async def list_advance_receipts_early(
         raise HTTPException(400, "customer_id or phone is required")
     docs = await db.receipts.find(q, {"_id": 0}).sort("created_at", -1).limit(50).to_list(50)
     name_cache: dict = {}
+    out_docs: list = []
     for d in docs:
+        # With partial allocations, only expose advances that still have a balance left.
+        allocated = _receipt_allocated(d)
+        remaining = _receipt_remaining(d)
+        if remaining <= 0:
+            continue
+        d["allocated"] = allocated
+        d["remaining"] = remaining
         if d["user"] not in name_cache:
             name_cache[d["user"]] = await _display_name_for(d["user"])
         d["display_name"] = name_cache[d["user"]]
         if d.get("pdf_path"):
             d["pdf_token"] = _make_media_token(d["pdf_path"])
-    return {"advances": docs, "count": len(docs), "total_amount": float(sum(d.get("amount", 0) for d in docs))}
+        out_docs.append(d)
+    return {
+        "advances": out_docs,
+        "count": len(out_docs),
+        "total_amount": float(sum(d.get("remaining", 0) for d in out_docs)),
+    }
 
 
 def _delivery_out(d: dict, today: str) -> dict:
