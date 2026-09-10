@@ -642,6 +642,8 @@ export const api = {
     currency?: string;
     product?: string;
     notes?: string;
+    purchase_amount?: number;
+    attach_receipt_ids?: string[];
   }) =>
     req<Sale>(`/sales`, { method: "POST", body: JSON.stringify(payload) }),
   deleteSale: (id: string) => req<{ deleted: boolean }>(`/sales/${id}`, { method: "DELETE" }),

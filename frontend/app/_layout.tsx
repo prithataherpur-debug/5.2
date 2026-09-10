@@ -1,12 +1,14 @@
 import { Stack, useRouter, useSegments } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import { useEffect } from "react";
-import { LogBox, Platform, View, ActivityIndicator } from "react-native";
+import { LogBox, Platform, View, Text, StyleSheet, ActivityIndicator } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import * as Notifications from "expo-notifications";
 import * as Linking from "expo-linking";
+
+import { Ionicons } from "@expo/vector-icons";
 
 import { useIconFonts } from "@/src/hooks/use-icon-fonts";
 import { registerForPush } from "@/src/lib/push";
@@ -82,6 +84,33 @@ function Gate() {
   );
 }
 
+function WebBlocked() {
+  return (
+    <View style={wb.container}>
+      <View style={wb.card}>
+        <View style={wb.iconWrap}>
+          <Ionicons name="phone-portrait-outline" size={40} color={theme.color.brand} />
+        </View>
+        <Text style={wb.title}>Available on mobile only</Text>
+        <Text style={wb.sub}>
+          Pritha Cabinet now runs exclusively on the mobile app for a faster, more secure experience.
+        </Text>
+        <View style={wb.stepsBox}>
+          <View style={wb.stepRow}>
+            <Ionicons name="download-outline" size={18} color={theme.color.brand} />
+            <Text style={wb.stepText}>Install the app on your Android or iOS phone.</Text>
+          </View>
+          <View style={wb.stepRow}>
+            <Ionicons name="log-in-outline" size={18} color={theme.color.brand} />
+            <Text style={wb.stepText}>Open it and sign in with your usual credentials.</Text>
+          </View>
+        </View>
+        <Text style={wb.footer}>The web version has been discontinued.</Text>
+      </View>
+    </View>
+  );
+}
+
 export default function RootLayout() {
   const [loaded, error] = useIconFonts();
   const router = useRouter();
@@ -128,6 +157,14 @@ export default function RootLayout() {
 
   if (!loaded && !error) return null;
 
+  // Web version discontinued — the app runs on mobile (Android/iOS) only.
+  if (Platform.OS === "web") {
+    return (
+      <SafeAreaProvider>
+        <WebBlocked />
+      </SafeAreaProvider>
+    );
+  }
 
   return (
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: theme.color.surfaceTertiary }}>
@@ -156,3 +193,38 @@ const webShell = {
   borderRightWidth: 1,
   borderColor: theme.color.border,
 };
+
+const wb = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: theme.color.surfaceTertiary,
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 24,
+  },
+  card: {
+    width: "100%",
+    maxWidth: 420,
+    backgroundColor: theme.color.surface,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: theme.color.border,
+    padding: 28,
+    alignItems: "center",
+  },
+  iconWrap: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: theme.color.brandTertiary,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 18,
+  },
+  title: { fontSize: 22, fontWeight: "800", color: theme.color.onSurface, textAlign: "center" },
+  sub: { fontSize: 14, color: theme.color.muted, textAlign: "center", marginTop: 10, lineHeight: 20 },
+  stepsBox: { alignSelf: "stretch", marginTop: 20, gap: 12 },
+  stepRow: { flexDirection: "row", alignItems: "center", gap: 12 },
+  stepText: { flex: 1, fontSize: 13, color: theme.color.onSurface, fontWeight: "600", lineHeight: 18 },
+  footer: { fontSize: 11, color: theme.color.muted, marginTop: 22, fontStyle: "italic" },
+});

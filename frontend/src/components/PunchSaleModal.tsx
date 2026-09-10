@@ -6,7 +6,9 @@ import { useEffect, useState } from "react";
 import { Ionicons } from "@expo/vector-icons";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { theme } from "@/src/lib/theme";
-import { api, Customer } from "@/src/lib/api";
+import { api, Customer, MoneyReceipt } from "@/src/lib/api";
+
+const fmtRcp = (n: number) => "₹" + Math.round(n).toLocaleString("en-IN");
 
 type Props = {
   visible: boolean;
@@ -25,9 +27,13 @@ export default function PunchSaleModal({ visible, onClose, onSaved, presetCustom
   const [dupCustomer, setDupCustomer] = useState<Customer | null>(null);
   const [amount, setAmount] = useState("");
   const [product, setProduct] = useState("");
+  const [purchaseCost, setPurchaseCost] = useState("");
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [advances, setAdvances] = useState<MoneyReceipt[]>([]);
+  const [selectedAdvIds, setSelectedAdvIds] = useState<Set<string>>(new Set());
+  const [advLoading, setAdvLoading] = useState(false);
 
   useEffect(() => {
     if (visible) {
@@ -39,10 +45,32 @@ export default function PunchSaleModal({ visible, onClose, onSaved, presetCustom
       setDupCustomer(null);
       setAmount("");
       setProduct("");
+      setPurchaseCost("");
       setNotes("");
       setErr("");
+      setAdvances([]);
+      setSelectedAdvIds(new Set());
     }
   }, [visible, presetCustomer]);
+
+  // Fetch advance receipts for the selected customer (existing customer only)
+  useEffect(() => {
+    if (!visible || mode !== "existing" || !customer?.id) {
+      setAdvances([]); setSelectedAdvIds(new Set());
+      return;
+    }
+    let cancelled = false;
+    setAdvLoading(true);
+    api.getAdvanceReceipts({ customer_id: customer.id })
+      .then((res) => {
+        if (cancelled) return;
+        setAdvances(res.advances || []);
+        setSelectedAdvIds(new Set((res.advances || []).map((r) => r.id))); // auto-select all
+      })
+      .catch(() => { if (!cancelled) { setAdvances([]); setSelectedAdvIds(new Set()); } })
+      .finally(() => { if (!cancelled) setAdvLoading(false); });
+    return () => { cancelled = true; };
+  }, [visible, mode, customer?.id]);
 
   // Clear duplicate banner when user edits the phone
   useEffect(() => {
@@ -80,6 +108,13 @@ export default function PunchSaleModal({ visible, onClose, onSaved, presetCustom
     }
     setBusy(true);
     setDupCustomer(null);
+    // Optional product cost (any employee can enter it)
+    let purchaseVal: number | undefined;
+    if (purchaseCost.trim() !== "") {
+      const p = parseFloat(purchaseCost);
+      if (Number.isNaN(p) || p < 0) { setErr("Enter a valid product cost."); setBusy(false); return; }
+      purchaseVal = p;
+    }
     try {
       let customerId: string | null = customer?.id ?? null;
       let customerName: string = customer?.name ?? "";
@@ -112,12 +147,17 @@ export default function PunchSaleModal({ visible, onClose, onSaved, presetCustom
         }
       }
 
+      // Only attach advances when we punched against the existing picked customer
+      const attachIds = (mode === "existing" && customer?.id) ? Array.from(selectedAdvIds) : [];
+
       await api.createSale({
         customer_id: customerId,
         customer_name: customerName,
         amount: n,
         product: product.trim(),
         notes: notes.trim(),
+        purchase_amount: purchaseVal,
+        attach_receipt_ids: attachIds,
       });
       onSaved();
     } catch (e: any) {
@@ -243,10 +283,62 @@ export default function PunchSaleModal({ visible, onClose, onSaved, presetCustom
                   </View>
                 ) : null}
                 <Text style={styles.hint}>
-                  We'll save this contact under your customers automatically.
+                  We&apos;ll save this contact under your customers automatically.
                 </Text>
               </View>
             )}
+
+            {/* Advance receipts for the selected customer */}
+            {mode === "existing" && customer?.id && (advLoading || advances.length > 0) ? (
+              <View style={styles.advBox} testID="sale-advances">
+                {advLoading ? (
+                  <View style={styles.advLoadingRow}>
+                    <ActivityIndicator color={theme.color.brand} size="small" />
+                    <Text style={styles.advHint}>Checking for advance payments…</Text>
+                  </View>
+                ) : (
+                  <>
+                    <View style={styles.advHead}>
+                      <Ionicons name="wallet-outline" size={14} color={theme.color.brand} />
+                      <Text style={styles.advTitle}>
+                        {advances.length} advance receipt{advances.length > 1 ? "s" : ""} for this customer
+                      </Text>
+                    </View>
+                    <Text style={styles.advHint}>Tap to attach — attached advances get linked to this sale.</Text>
+                    {advances.map((r) => {
+                      const on = selectedAdvIds.has(r.id);
+                      return (
+                        <Pressable
+                          key={r.id}
+                          onPress={() => setSelectedAdvIds((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(r.id)) next.delete(r.id); else next.add(r.id);
+                            return next;
+                          })}
+                          style={[styles.advItem, on && styles.advItemOn]}
+                          testID={`sale-adv-${r.id}`}
+                        >
+                          <Ionicons name={on ? "checkbox" : "square-outline"} size={18} color={on ? theme.color.brand : theme.color.muted} />
+                          <View style={{ flex: 1, marginLeft: 8 }}>
+                            <Text style={styles.advItemNo}>{r.receipt_no} · {r.date_key}</Text>
+                            <Text style={styles.advItemMeta}>{r.payment_mode.toUpperCase()} · {r.narration || "Advance"}</Text>
+                          </View>
+                          <Text style={styles.advItemAmt}>{fmtRcp(r.amount)}</Text>
+                        </Pressable>
+                      );
+                    })}
+                    {selectedAdvIds.size > 0 ? (
+                      <View style={styles.advFooter}>
+                        <Text style={styles.advFooterLabel}>Attaching</Text>
+                        <Text style={styles.advFooterValue}>
+                          {fmtRcp(advances.filter((r) => selectedAdvIds.has(r.id)).reduce((s, r) => s + r.amount, 0))}
+                        </Text>
+                      </View>
+                    ) : null}
+                  </>
+                )}
+              </View>
+            ) : null}
 
             <Text style={styles.label}>Amount (₹)</Text>
             <TextInput
@@ -268,6 +360,18 @@ export default function PunchSaleModal({ visible, onClose, onSaved, presetCustom
               placeholderTextColor={theme.color.muted}
               style={styles.input}
               testID="sale-product"
+              returnKeyType="done"
+            />
+
+            <Text style={styles.label}>Product cost (₹)</Text>
+            <TextInput
+              value={purchaseCost}
+              onChangeText={setPurchaseCost}
+              keyboardType="decimal-pad"
+              placeholder="What it cost you (optional)"
+              placeholderTextColor={theme.color.muted}
+              style={styles.input}
+              testID="sale-cost"
               returnKeyType="done"
             />
 
@@ -470,4 +574,32 @@ const styles = StyleSheet.create({
     backgroundColor: "#B45309", alignItems: "center", justifyContent: "center",
   },
   dupBtnText: { color: "#fff", fontWeight: "800", fontSize: 13 },
+
+  advBox: {
+    marginTop: theme.space.md, padding: 10,
+    borderRadius: theme.radius.md,
+    backgroundColor: theme.color.brandTertiary,
+    borderWidth: 1, borderColor: theme.color.brand + "55",
+  },
+  advLoadingRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  advHead: { flexDirection: "row", alignItems: "center", gap: 5, marginBottom: 4 },
+  advTitle: { fontSize: 12, fontWeight: "800", color: theme.color.brand, letterSpacing: 0.3 },
+  advHint: { fontSize: 10, color: theme.color.muted, fontStyle: "italic", marginBottom: 6 },
+  advItem: {
+    flexDirection: "row", alignItems: "center",
+    padding: 8, borderRadius: theme.radius.sm,
+    backgroundColor: theme.color.surface,
+    borderWidth: 1, borderColor: theme.color.border,
+    marginTop: 4,
+  },
+  advItemOn: { borderColor: theme.color.brand, backgroundColor: "#EFF6FF" },
+  advItemNo: { fontSize: 12, fontWeight: "800", color: theme.color.onSurface },
+  advItemMeta: { fontSize: 10, color: theme.color.muted, marginTop: 1 },
+  advItemAmt: { fontSize: 13, fontWeight: "800", color: theme.color.success },
+  advFooter: {
+    marginTop: 8, paddingTop: 6, borderTopWidth: 1, borderTopColor: theme.color.brand + "33", borderStyle: "dashed",
+    flexDirection: "row", justifyContent: "space-between",
+  },
+  advFooterLabel: { fontSize: 11, fontWeight: "700", color: theme.color.muted },
+  advFooterValue: { fontSize: 13, fontWeight: "800", color: theme.color.success },
 });

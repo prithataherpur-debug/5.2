@@ -232,6 +232,8 @@ class SaleBody(BaseModel):
     currency: str = "INR"
     product: Optional[str] = ""
     notes: Optional[str] = ""
+    purchase_amount: Optional[float] = None  # product cost / COGS entered at punch time
+    attach_receipt_ids: List[str] = Field(default_factory=list)  # advance receipts to link to this sale
 
 
 class SalePatchBody(BaseModel):
@@ -3094,8 +3096,16 @@ async def create_sale(body: SaleBody, u=Depends(current_user)):
     cash_amt, online_amt, mode = _split_payment(body.amount, body.cash_amount, body.online_amount, body.payment_mode)
     total = cash_amt + online_amt if (body.cash_amount is not None or body.online_amount is not None) else float(body.amount)
 
+    # Product cost / COGS (optional; any employee can enter it at punch time)
+    purchase_val: Optional[float] = None
+    if body.purchase_amount is not None:
+        if body.purchase_amount < 0:
+            raise HTTPException(400, "purchase_amount must be >= 0")
+        purchase_val = float(body.purchase_amount)
+
+    sale_id = str(uuid.uuid4())
     doc = {
-        "id": str(uuid.uuid4()),
+        "id": sale_id,
         "user": u["username"],
         "display_name": u.get("display_name", u["username"]),
         "customer_id": body.customer_id,
@@ -3104,7 +3114,7 @@ async def create_sale(body: SaleBody, u=Depends(current_user)):
         "cash_amount": cash_amt,
         "online_amount": online_amt,
         "payment_mode": mode,
-        "purchase_amount": None,
+        "purchase_amount": purchase_val,
         "currency": body.currency or "INR",
         "product": body.product or "",
         "notes": body.notes or "",
@@ -3113,6 +3123,39 @@ async def create_sale(body: SaleBody, u=Depends(current_user)):
     }
     await db.sales.insert_one(doc)
     doc.pop("_id", None)
+
+    # Attach any advance receipts the caller selected: link them to this sale.
+    if body.attach_receipt_ids:
+        cust_phone = cust.get("phone") if body.customer_id else None  # from lookup above
+        for rid in body.attach_receipt_ids:
+            r = await db.receipts.find_one(
+                {"id": rid},
+                {"_id": 0, "customer_id": 1, "customer_mobile": 1, "source_type": 1, "reference_no": 1},
+            )
+            if not r:
+                continue
+            # Only attach genuine advances (source_type='other' with no reference)
+            if (r.get("source_type") or "other").lower() != "other":
+                continue
+            if r.get("reference_no"):
+                continue
+            # Ensure the receipt belongs to the same customer (by id or phone)
+            same = False
+            if body.customer_id and r.get("customer_id") == body.customer_id:
+                same = True
+            elif cust_phone and r.get("customer_mobile"):
+                if norm_phone(cust_phone) == norm_phone(r["customer_mobile"]):
+                    same = True
+            if not same:
+                continue
+            await db.receipts.update_one(
+                {"id": rid},
+                {"$set": {
+                    "source_type": "sale",
+                    "source_id": sale_id,
+                    "source_label": f"Sale · {cust_name or 'Customer'}",
+                }},
+            )
 
     await _notify_user(
         u["username"],

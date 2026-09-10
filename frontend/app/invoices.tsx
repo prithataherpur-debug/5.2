@@ -154,6 +154,16 @@ export default function InvoicesScreen() {
                   <Ionicons name="logo-whatsapp" size={14} color="#fff" />
                   <Text style={[styles.actionText, { color: "#fff" }]}>WhatsApp</Text>
                 </Pressable>
+                {item.customer_id ? (
+                  <Pressable
+                    onPress={() => router.push({ pathname: "/customer/[id]/ledger", params: { id: item.customer_id! } })}
+                    style={styles.actionBtn}
+                    testID={`inv-ledger-${item.id}`}
+                  >
+                    <Ionicons name="reader-outline" size={14} color={theme.color.brand} />
+                    <Text style={styles.actionText}>Ledger</Text>
+                  </Pressable>
+                ) : null}
                 {isAdmin ? (
                   <Pressable onPress={() => setEditing(item)} style={styles.actionBtn} testID={`inv-edit-${item.id}`}>
                     <Ionicons name="create-outline" size={14} color={theme.color.brand} />
@@ -609,7 +619,7 @@ const styles = StyleSheet.create({
   cardName: { fontSize: 15, fontWeight: "800", color: theme.color.onSurface, marginTop: 2 },
   cardMeta: { fontSize: 11, color: theme.color.muted, marginTop: 2 },
   cardAmt: { fontSize: 18, fontWeight: "900", color: theme.color.success },
-  actionsRow: { flexDirection: "row", gap: 8 },
+  actionsRow: { flexDirection: "row", gap: 8, flexWrap: "wrap" },
   actionBtn: {
     flexDirection: "row", alignItems: "center", gap: 4,
     paddingHorizontal: 10, height: 32, borderRadius: theme.radius.pill,
