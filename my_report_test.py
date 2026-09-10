@@ -9,7 +9,7 @@ import json
 from typing import Optional, Dict
 
 # Configuration
-BASE_URL = "https://a5d12c17-2a65-4082-bad6-428d840a89fc.preview.emergentagent.com"
+BASE_URL = "https://open-my-project-11.preview.emergentagent.com"
 API_BASE = f"{BASE_URL}/api"
 
 # Test credentials

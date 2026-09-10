@@ -17,7 +17,7 @@ import requests
 
 BASE = os.environ.get("EXPO_PUBLIC_BACKEND_URL", "").rstrip("/")
 if not BASE:
-    BASE = "https://open-my-project-10.preview.emergentagent.com"
+    BASE = "https://open-my-project-11.preview.emergentagent.com"
 API = f"{BASE}/api"
 
 ADMIN = ("admin", "Admin@2026")

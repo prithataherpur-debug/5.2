@@ -37,5 +37,5 @@
   "seed_data_creation": "Created 2 test customers (TEST_Overdue_6cd1fe, TEST_Overdue_f58752) with a mix of overdue/receipted sales and one un-receipted invoice for UI verification. Safe to delete.",
   "retest_needed": false,
   "should_main_agent_self_test": false,
-  "context_for_next_testing_agent": "Use admin/Admin@2026 on https://open-my-project-10.preview.emergentagent.com. Ledger route: /customer/{id}/ledger. To force overdue state: POST /api/sales with {customer_id, customer_name, customer_mobile, amount, notes} — DO NOT create a matching receipt. To clear: POST /api/receipts with {customer_id, customer_name, customer_mobile, amount, mode:'cash', source_type:'sale', source_id:<sale_id>}. testIDs used: ledger-overdue-strip, ledger-overdue-sale-{id}, ledger-overdue-invoice-{id}."
+  "context_for_next_testing_agent": "Use admin/Admin@2026 on https://open-my-project-11.preview.emergentagent.com. Ledger route: /customer/{id}/ledger. To force overdue state: POST /api/sales with {customer_id, customer_name, customer_mobile, amount, notes} — DO NOT create a matching receipt. To clear: POST /api/receipts with {customer_id, customer_name, customer_mobile, amount, mode:'cash', source_type:'sale', source_id:<sale_id>}. testIDs used: ledger-overdue-strip, ledger-overdue-sale-{id}, ledger-overdue-invoice-{id}."
 }
