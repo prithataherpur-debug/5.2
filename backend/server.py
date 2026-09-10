@@ -69,6 +69,16 @@ def norm_phone(p: str) -> str:
     return re.sub(r"\D", "", p or "")
 
 
+def _receipt_allocated(r: dict) -> float:
+    """Total amount of an advance receipt already applied to sales/invoices."""
+    return round(sum(float(a.get("amount") or 0) for a in (r.get("allocations") or [])), 2)
+
+
+def _receipt_remaining(r: dict) -> float:
+    """Unused balance still available on an advance receipt."""
+    return round(float(r.get("amount") or 0) - _receipt_allocated(r), 2)
+
+
 # ---------- Object storage ----------
 def _init_storage_sync() -> str:
     global storage_key
@@ -222,6 +232,11 @@ class ReassignItemsBody(BaseModel):
     new_owner: str
 
 
+class AdvanceAllocationIn(BaseModel):
+    receipt_id: str
+    amount: float = Field(gt=0)
+
+
 class SaleBody(BaseModel):
     customer_id: Optional[str] = None
     customer_name: Optional[str] = ""
@@ -234,6 +249,7 @@ class SaleBody(BaseModel):
     notes: Optional[str] = ""
     purchase_amount: Optional[float] = None  # product cost / COGS entered at punch time
     attach_receipt_ids: List[str] = Field(default_factory=list)  # advance receipts to link to this sale
+    advance_allocations: List[AdvanceAllocationIn] = Field(default_factory=list)  # partial advance amounts to apply
 
 
 class SalePatchBody(BaseModel):
@@ -288,6 +304,7 @@ class InvoiceCreateBody(BaseModel):
     notes: Optional[str] = ""
     customer_id: Optional[str] = None
     attach_receipt_ids: List[str] = Field(default_factory=list)  # advance receipts to link to this invoice
+    advance_allocations: List[AdvanceAllocationIn] = Field(default_factory=list)  # partial advance amounts to apply
     cash_amount: Optional[float] = None    # explicit cash portion (customer pays in cash)
     online_amount: Optional[float] = None  # explicit online portion
 
@@ -385,6 +402,10 @@ class MoneyReceipt(BaseModel):
     delivery_due_date: Optional[str] = None  # YYYY-MM-DD
     delivered_at: Optional[str] = None
     delivery_note: str = ""
+    # Advance allocation tracking: how much of this receipt has been applied to sales/invoices
+    allocations: List[dict] = Field(default_factory=list)
+    allocated: float = 0.0
+    remaining: float = 0.0
 
 
 class DeliveryPatchBody(BaseModel):
@@ -3124,38 +3145,14 @@ async def create_sale(body: SaleBody, u=Depends(current_user)):
     await db.sales.insert_one(doc)
     doc.pop("_id", None)
 
-    # Attach any advance receipts the caller selected: link them to this sale.
-    if body.attach_receipt_ids:
+    # Apply any advance receipts the caller selected (partial allocations supported).
+    pairs = [(a.receipt_id, a.amount) for a in body.advance_allocations]
+    pairs += [(rid, None) for rid in body.attach_receipt_ids]  # legacy: apply full remaining
+    if pairs:
         cust_phone = cust.get("phone") if body.customer_id else None  # from lookup above
-        for rid in body.attach_receipt_ids:
-            r = await db.receipts.find_one(
-                {"id": rid},
-                {"_id": 0, "customer_id": 1, "customer_mobile": 1, "source_type": 1, "reference_no": 1},
-            )
-            if not r:
-                continue
-            # Only attach genuine advances (source_type='other' with no reference)
-            if (r.get("source_type") or "other").lower() != "other":
-                continue
-            if r.get("reference_no"):
-                continue
-            # Ensure the receipt belongs to the same customer (by id or phone)
-            same = False
-            if body.customer_id and r.get("customer_id") == body.customer_id:
-                same = True
-            elif cust_phone and r.get("customer_mobile"):
-                if norm_phone(cust_phone) == norm_phone(r["customer_mobile"]):
-                    same = True
-            if not same:
-                continue
-            await db.receipts.update_one(
-                {"id": rid},
-                {"$set": {
-                    "source_type": "sale",
-                    "source_id": sale_id,
-                    "source_label": f"Sale · {cust_name or 'Customer'}",
-                }},
-            )
+        await _apply_advance_allocations(
+            pairs, body.customer_id, cust_phone, "sale", sale_id, f"Sale · {cust_name or 'Customer'}"
+        )
 
     await _notify_user(
         u["username"],
@@ -3165,6 +3162,70 @@ async def create_sale(body: SaleBody, u=Depends(current_user)):
         idem=f"sale-{doc['id']}",
     )
     return sale_from_doc(doc)
+
+
+async def _apply_advance_allocations(pairs, customer_id, customer_phone, target_type, target_id, target_label):
+    """Apply advance receipts (partially) to a sale/invoice.
+    pairs: list of (receipt_id, amount_or_None). None => apply full remaining balance.
+    Only genuine advances (source_type='other', no reference_no) belonging to the same
+    customer are touched. Each application is capped at the receipt's remaining balance."""
+    for rid, amt in pairs:
+        if not rid:
+            continue
+        r = await db.receipts.find_one({"id": rid})
+        if not r:
+            continue
+        if (r.get("source_type") or "other").lower() != "other":
+            continue
+        if r.get("reference_no"):
+            continue
+        same = bool(customer_id and r.get("customer_id") == customer_id)
+        if not same and customer_phone and r.get("customer_mobile"):
+            same = norm_phone(customer_phone) == norm_phone(r["customer_mobile"])
+        if not same:
+            continue
+        remaining = _receipt_remaining(r)
+        if remaining <= 0:
+            continue
+        apply_amt = remaining if amt is None else min(float(amt), remaining)
+        apply_amt = round(apply_amt, 2)
+        if apply_amt <= 0:
+            continue
+        await db.receipts.update_one(
+            {"id": rid},
+            {"$push": {"allocations": {
+                "target_type": target_type,
+                "target_id": target_id,
+                "target_label": target_label,
+                "amount": apply_amt,
+                "date": now_iso(),
+            }}},
+        )
+
+
+async def _alloc_linked_by_target(ids, target_type):
+    """Return {target_id: [linked_receipt,...]} for advances applied to the given sale/invoice ids."""
+    res: dict = {}
+    if not ids:
+        return res
+    cur = db.receipts.find(
+        {"source_type": "other", "allocations.target_id": {"$in": list(ids)}},
+        {"_id": 0, "id": 1, "receipt_no": 1, "payment_mode": 1, "pdf_path": 1, "allocations": 1},
+    )
+    async for r in cur:
+        for a in (r.get("allocations") or []):
+            if a.get("target_type") == target_type and a.get("target_id") in ids:
+                res.setdefault(a["target_id"], []).append({
+                    "id": r["id"],
+                    "receipt_no": r["receipt_no"],
+                    "amount": float(a.get("amount") or 0),
+                    "payment_mode": (r.get("payment_mode") or "cash").lower(),
+                    "reference_no": "",
+                    "source_type": "advance",
+                    "is_advance": True,
+                    "pdf_token": _make_media_token(r["pdf_path"]) if r.get("pdf_path") else None,
+                })
+    return res
 
 
 @api_router.get("/sales", response_model=List[Sale])
@@ -3195,8 +3256,11 @@ async def list_sales(u=Depends(current_user), scope: str = "all", days: int = 30
                 "reference_no": r.get("reference_no") or "",
                 "pdf_token": _make_media_token(r["pdf_path"]) if r.get("pdf_path") else None,
             })
+        alloc_by_sale = await _alloc_linked_by_target(ids, "sale")
         for s in sales:
-            s.linked_receipts = by_src.get(s.id, [])
+            base = by_src.get(s.id, [])
+            extra = alloc_by_sale.get(s.id, [])
+            s.linked_receipts = base + extra
     return sales
 
 
@@ -3557,35 +3621,13 @@ async def create_invoice(body: InvoiceCreateBody, u=Depends(current_user)):
     }
     await db.invoices.insert_one(doc)
 
-    # Attach any advance receipts the caller selected: link them to this invoice.
-    if body.attach_receipt_ids:
-        for rid in body.attach_receipt_ids:
-            r = await db.receipts.find_one({"id": rid}, {"_id": 0, "customer_id": 1, "customer_mobile": 1, "source_type": 1, "reference_no": 1})
-            if not r:
-                continue
-            # Sanity: only attach if the receipt is currently an advance (no reference / source_type=other)
-            if (r.get("source_type") or "other").lower() != "other":
-                continue
-            if r.get("reference_no"):
-                continue
-            # Ensure the receipt belongs to the same customer (by id or phone)
-            same = False
-            if linked_customer_id and r.get("customer_id") == linked_customer_id:
-                same = True
-            elif body.customer_mobile and r.get("customer_mobile"):
-                if norm_phone(body.customer_mobile) == norm_phone(r["customer_mobile"]):
-                    same = True
-            if not same:
-                continue
-            await db.receipts.update_one(
-                {"id": rid},
-                {"$set": {
-                    "source_type": "invoice",
-                    "source_id": inv_id,
-                    "source_label": f"Invoice {invoice_no}",
-                    "reference_no": invoice_no,
-                }},
-            )
+    # Apply any advance receipts the caller selected (partial allocations supported).
+    pairs = [(a.receipt_id, a.amount) for a in body.advance_allocations]
+    pairs += [(rid, None) for rid in body.attach_receipt_ids]  # legacy: apply full remaining
+    if pairs:
+        await _apply_advance_allocations(
+            pairs, linked_customer_id, body.customer_mobile, "invoice", inv_id, f"Invoice {invoice_no}"
+        )
 
     doc["display_name"] = display
     doc["pdf_token"] = pdf_token
