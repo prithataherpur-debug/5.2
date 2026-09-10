@@ -34,6 +34,7 @@ export default function PunchSaleModal({ visible, onClose, onSaved, presetCustom
   const [advances, setAdvances] = useState<MoneyReceipt[]>([]);
   const [selectedAdvIds, setSelectedAdvIds] = useState<Set<string>>(new Set());
   const [advAmounts, setAdvAmounts] = useState<Record<string, string>>({});
+  const [advTouched, setAdvTouched] = useState<Set<string>>(new Set());
   const [advLoading, setAdvLoading] = useState(false);
 
   useEffect(() => {
@@ -52,6 +53,7 @@ export default function PunchSaleModal({ visible, onClose, onSaved, presetCustom
       setAdvances([]);
       setSelectedAdvIds(new Set());
       setAdvAmounts({});
+      setAdvTouched(new Set());
     }
   }, [visible, presetCustomer]);
 
