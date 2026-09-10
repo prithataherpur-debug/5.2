@@ -195,6 +195,8 @@ export type Invoice = {
   pdf_token?: string | null;
   date_key: string;
   created_at: string;
+  advance_applied?: number;
+  balance_due?: number | null;
   linked_receipts?: LinkedReceipt[];
 };
 

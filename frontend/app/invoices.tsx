@@ -145,6 +145,18 @@ export default function InvoicesScreen() {
                 </View>
                 <Text style={styles.cardAmt}>{fmt(item.total)}</Text>
               </View>
+              {(item.advance_applied ?? 0) > 0 ? (
+                <View style={styles.balRow} testID={`inv-balance-${item.id}`}>
+                  <View style={styles.balCell}>
+                    <Text style={styles.balLabel}>Advance paid</Text>
+                    <Text style={styles.balAdv}>- {fmt(item.advance_applied ?? 0)}</Text>
+                  </View>
+                  <View style={styles.balCell}>
+                    <Text style={styles.balLabel}>Balance due</Text>
+                    <Text style={styles.balDue}>{fmt(Math.max(0, item.balance_due ?? (item.total - (item.advance_applied ?? 0))))}</Text>
+                  </View>
+                </View>
+              ) : null}
               <View style={styles.actionsRow}>
                 <Pressable onPress={() => openPdf(item)} style={styles.actionBtn} testID={`inv-pdf-${item.id}`}>
                   <Ionicons name="document-outline" size={14} color={theme.color.brand} />
@@ -576,6 +588,18 @@ function InvoiceEditor({
               <Text style={styles.totalLabel}>Grand total</Text>
               <Text style={styles.totalValue}>{fmt(total)}</Text>
             </View>
+            {advTotalApplied > 0 ? (
+              <View style={styles.balanceBox} testID="inv-balance-summary">
+                <View style={styles.balanceLine}>
+                  <Text style={styles.balanceLbl}>Advance applied</Text>
+                  <Text style={styles.balanceAdv}>- {fmt(advTotalApplied)}</Text>
+                </View>
+                <View style={[styles.balanceLine, styles.balanceLineDue]}>
+                  <Text style={styles.balanceDueLbl}>Balance due</Text>
+                  <Text style={styles.balanceDueVal}>{fmt(Math.max(0, total - advTotalApplied))}</Text>
+                </View>
+              </View>
+            ) : null}
             <View style={styles.profitRow}>
               <View style={styles.profitCell}>
                 <Text style={styles.profitLabel}>Total cost</Text>
@@ -749,6 +773,18 @@ const styles = StyleSheet.create({
   totalBox: { marginTop: theme.space.md, padding: 12, borderRadius: theme.radius.md, backgroundColor: theme.color.brand, flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   totalLabel: { fontSize: 12, color: "#fff", fontWeight: "700", letterSpacing: 1, textTransform: "uppercase" },
   totalValue: { fontSize: 22, fontWeight: "900", color: "#fff" },
+  balanceBox: { marginTop: 8, padding: 12, borderRadius: theme.radius.md, backgroundColor: theme.color.brandTertiary, borderWidth: 1, borderColor: theme.color.brand + "55" },
+  balanceLine: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 3 },
+  balanceLineDue: { marginTop: 4, paddingTop: 8, borderTopWidth: 1, borderTopColor: theme.color.brand + "44", borderStyle: "dashed" },
+  balanceLbl: { fontSize: 13, color: theme.color.muted, fontWeight: "700" },
+  balanceAdv: { fontSize: 14, color: theme.color.success, fontWeight: "800" },
+  balanceDueLbl: { fontSize: 14, color: theme.color.onSurface, fontWeight: "800" },
+  balanceDueVal: { fontSize: 18, color: theme.color.brand, fontWeight: "900" },
+  balRow: { flexDirection: "row", marginTop: 8, gap: 10 },
+  balCell: { flex: 1, backgroundColor: theme.color.brandTertiary, borderRadius: theme.radius.sm, paddingVertical: 6, paddingHorizontal: 10 },
+  balLabel: { fontSize: 10, color: theme.color.muted, fontWeight: "700", textTransform: "uppercase", letterSpacing: 0.4 },
+  balAdv: { fontSize: 14, color: theme.color.success, fontWeight: "800", marginTop: 2 },
+  balDue: { fontSize: 15, color: theme.color.brand, fontWeight: "900", marginTop: 2 },
   profitRow: { flexDirection: "row", gap: 8, marginTop: 8 },
   profitCell: {
     flex: 1, padding: 10, borderRadius: theme.radius.md,

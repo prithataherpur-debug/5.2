@@ -341,6 +341,8 @@ class Invoice(BaseModel):
     pdf_token: Optional[str] = None
     date_key: str
     created_at: str
+    advance_applied: float = 0.0
+    balance_due: Optional[float] = None
     linked_receipts: List[dict] = Field(default_factory=list)
 
 
@@ -3168,7 +3170,9 @@ async def _apply_advance_allocations(pairs, customer_id, customer_phone, target_
     """Apply advance receipts (partially) to a sale/invoice.
     pairs: list of (receipt_id, amount_or_None). None => apply full remaining balance.
     Only genuine advances (source_type='other', no reference_no) belonging to the same
-    customer are touched. Each application is capped at the receipt's remaining balance."""
+    customer are touched. Each application is capped at the receipt's remaining balance.
+    Returns the total amount actually applied across all pairs."""
+    total_applied = 0.0
     for rid, amt in pairs:
         if not rid:
             continue
@@ -3201,6 +3205,8 @@ async def _apply_advance_allocations(pairs, customer_id, customer_phone, target_
                 "date": now_iso(),
             }}},
         )
+        total_applied += apply_amt
+    return round(total_applied, 2)
 
 
 async def _alloc_linked_by_target(ids, target_type):
@@ -3415,7 +3421,7 @@ async def _build_document_pdf(
     doc_kind: str, doc_no: str, generated_by: str, date_key: str,
     customer_name: str, customer_mobile: str, customer_address: str,
     items_rows: List[List[str]], grand_total: float,
-    footer_notes: str = "", narration: str = "",
+    footer_notes: str = "", narration: str = "", advance_paid: float = 0.0,
 ) -> bytes:
     """Render a shared invoice/receipt PDF."""
     settings = await get_settings_doc()
@@ -3494,6 +3500,30 @@ async def _build_document_pdf(
     ]))
     story.append(total_table)
     story.append(Spacer(1, 10))
+
+    # Advance applied + balance due (only when an advance was applied)
+    if advance_paid and advance_paid > 0:
+        balance_due = round(grand_total - advance_paid, 2)
+        bal_table = Table(
+            [
+                ["Advance paid", "- " + _rupees(advance_paid)],
+                ["Balance due", _rupees(balance_due)],
+            ],
+            colWidths=[13*cm, 4*cm],
+        )
+        bal_table.setStyle(TableStyle([
+            ("ALIGN", (1,0), (1,-1), "RIGHT"),
+            ("FONTSIZE", (0,0), (-1,-1), 12),
+            ("FONTNAME", (0,0), (-1,-1), "Helvetica"),
+            ("TEXTCOLOR", (0,0), (1,0), _colors.HexColor("#047857")),
+            ("FONTNAME", (0,1), (-1,1), "Helvetica-Bold"),
+            ("TEXTCOLOR", (0,1), (1,1), _colors.HexColor("#B45309")),
+            ("LINEABOVE", (0,1), (-1,1), 0.5, _colors.HexColor("#F59E0B")),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 6),
+            ("TOPPADDING", (0,0), (-1,-1), 6),
+        ]))
+        story.append(bal_table)
+        story.append(Spacer(1, 10))
 
     if narration:
         story.append(Paragraph("NARRATION", lbl_style))
@@ -3583,6 +3613,18 @@ async def create_invoice(body: InvoiceCreateBody, u=Depends(current_user)):
         if pay_mode == "mixed"
         else f"Payment mode: {pay_mode.upper()}"
     )
+
+    # Apply any advance receipts the caller selected (partial allocations supported)
+    # BEFORE rendering the PDF so the document can show "Advance paid" + "Balance due".
+    pairs = [(a.receipt_id, a.amount) for a in body.advance_allocations]
+    pairs += [(rid, None) for rid in body.attach_receipt_ids]  # legacy: apply full remaining
+    advance_applied = 0.0
+    if pairs:
+        advance_applied = await _apply_advance_allocations(
+            pairs, linked_customer_id, body.customer_mobile, "invoice", inv_id, f"Invoice {invoice_no}"
+        )
+    balance_due = round(total - advance_applied, 2)
+
     pdf_bytes = await _build_document_pdf(
         doc_kind="invoice", doc_no=invoice_no,
         generated_by=display, date_key=date_key,
@@ -3590,6 +3632,7 @@ async def create_invoice(body: InvoiceCreateBody, u=Depends(current_user)):
         customer_address=body.customer_address or "",
         items_rows=rows, grand_total=total,
         footer_notes=(body.notes or "") + ("\n" + pay_line if body.notes else pay_line),
+        advance_paid=advance_applied,
     )
     pdf_path = f"{APP_NAME}/invoices/{u['username']}/{invoice_no}.pdf"
     await put_object(pdf_path, pdf_bytes, "application/pdf")
@@ -3618,16 +3661,10 @@ async def create_invoice(body: InvoiceCreateBody, u=Depends(current_user)):
         "pdf_path": pdf_path,
         "date_key": date_key,
         "created_at": now,
+        "advance_applied": advance_applied,
+        "balance_due": balance_due,
     }
     await db.invoices.insert_one(doc)
-
-    # Apply any advance receipts the caller selected (partial allocations supported).
-    pairs = [(a.receipt_id, a.amount) for a in body.advance_allocations]
-    pairs += [(rid, None) for rid in body.attach_receipt_ids]  # legacy: apply full remaining
-    if pairs:
-        await _apply_advance_allocations(
-            pairs, linked_customer_id, body.customer_mobile, "invoice", inv_id, f"Invoice {invoice_no}"
-        )
 
     doc["display_name"] = display
     doc["pdf_token"] = pdf_token

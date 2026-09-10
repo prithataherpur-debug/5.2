@@ -55,28 +55,41 @@ export default function PunchSaleModal({ visible, onClose, onSaved, presetCustom
     }
   }, [visible, presetCustomer]);
 
-  // Fetch advance receipts for the selected customer (existing customer only)
+  // Fetch advance receipts for the selected/typed customer.
+  // Existing mode → look up by customer_id. New-customer mode → look up by typed phone.
+  // This keeps a customer's leftover advances visible on the sale form until fully used.
   useEffect(() => {
-    if (!visible || mode !== "existing" || !customer?.id) {
+    if (!visible) { setAdvances([]); setSelectedAdvIds(new Set()); setAdvAmounts({}); return; }
+    const phoneDigits = newPhone.replace(/\D/g, "");
+    const query = mode === "existing" && customer?.id
+      ? { customer_id: customer.id }
+      : (mode === "new" && phoneDigits.length >= 6 ? { phone: newPhone.trim() } : null);
+    if (!query) {
       setAdvances([]); setSelectedAdvIds(new Set()); setAdvAmounts({});
       return;
     }
     let cancelled = false;
+    const applyRes = (res: { advances: MoneyReceipt[] }) => {
+      if (cancelled) return;
+      const adv = res.advances || [];
+      setAdvances(adv);
+      setSelectedAdvIds(new Set(adv.map((r) => r.id))); // auto-select all
+      const amts: Record<string, string> = {};
+      adv.forEach((r) => { amts[r.id] = String(Math.round(r.remaining ?? r.amount)); });
+      setAdvAmounts(amts);
+    };
+    const fail = () => { if (!cancelled) { setAdvances([]); setSelectedAdvIds(new Set()); setAdvAmounts({}); } };
     setAdvLoading(true);
-    api.getAdvanceReceipts({ customer_id: customer.id })
-      .then((res) => {
-        if (cancelled) return;
-        const adv = res.advances || [];
-        setAdvances(adv);
-        setSelectedAdvIds(new Set(adv.map((r) => r.id))); // auto-select all
-        const amts: Record<string, string> = {};
-        adv.forEach((r) => { amts[r.id] = String(Math.round(r.remaining ?? r.amount)); });
-        setAdvAmounts(amts);
-      })
-      .catch(() => { if (!cancelled) { setAdvances([]); setSelectedAdvIds(new Set()); setAdvAmounts({}); } })
-      .finally(() => { if (!cancelled) setAdvLoading(false); });
-    return () => { cancelled = true; };
-  }, [visible, mode, customer?.id]);
+    // Debounce phone lookups; existing-customer lookups fire immediately.
+    const delay = "phone" in query ? 400 : 0;
+    const t = setTimeout(() => {
+      api.getAdvanceReceipts(query)
+        .then(applyRes)
+        .catch(fail)
+        .finally(() => { if (!cancelled) setAdvLoading(false); });
+    }, delay);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [visible, mode, customer?.id, newPhone]);
 
   // Clear duplicate banner when user edits the phone
   useEffect(() => {
@@ -163,14 +176,12 @@ export default function PunchSaleModal({ visible, onClose, onSaved, presetCustom
         }
       }
 
-      // Only attach advances when we punched against the existing picked customer.
-      // Partial amounts are supported via advance_allocations; the advance stays
-      // available (on both sale & invoice screens) until fully consumed.
-      const allocations = (mode === "existing" && customer?.id)
-        ? advances
-            .map((r) => ({ receipt_id: r.id, amount: appliedFor(r) }))
-            .filter((a) => a.amount > 0)
-        : [];
+      // Apply selected advances (partial amounts supported). Works for both an
+      // existing picked customer and a newly-created customer (matched by phone on
+      // the backend). The advance stays available until fully consumed.
+      const allocations = advances
+        .map((r) => ({ receipt_id: r.id, amount: appliedFor(r) }))
+        .filter((a) => a.amount > 0);
 
       await api.createSale({
         customer_id: customerId,
@@ -310,8 +321,8 @@ export default function PunchSaleModal({ visible, onClose, onSaved, presetCustom
               </View>
             )}
 
-            {/* Advance receipts for the selected customer */}
-            {mode === "existing" && customer?.id && (advLoading || advances.length > 0) ? (
+            {/* Advance receipts for the selected/typed customer */}
+            {(advLoading || advances.length > 0) ? (
               <View style={styles.advBox} testID="sale-advances">
                 {advLoading ? (
                   <View style={styles.advLoadingRow}>

@@ -1,963 +1,791 @@
 #!/usr/bin/env python3
 """
-Backend test for partial advance allocation feature.
-Tests the new advance_allocations field on sales & invoices.
+Backend test for invoice advance_applied + balance_due feature.
+Tests the NEW invoice fields: advance_applied and balance_due.
 """
 import requests
 import json
-from typing import Optional
+import sys
 
 # Configuration
 BASE_URL = "https://6661bdad-da1a-401e-b57e-0be08928ca8f.preview.emergentagent.com/api"
-ADMIN_USER = "admin"
-ADMIN_PASS = "Admin@2026"
-EMP_USER = "emp1"
-EMP_PASS = "Emp@2026"
+USERNAME = "admin"
+PASSWORD = "Admin@2026"
 
 # Test data tracking for cleanup
-test_customers = []
-test_receipts = []
-test_sales = []
-test_invoices = []
+created_customers = []
+created_receipts = []
+created_invoices = []
 
-def login(username: str, password: str) -> str:
+def login():
     """Login and return access token."""
-    resp = requests.post(f"{BASE_URL}/auth/login", json={"username": username, "password": password})
+    resp = requests.post(f"{BASE_URL}/auth/login", json={"username": USERNAME, "password": PASSWORD})
     if resp.status_code != 200:
-        raise Exception(f"Login failed: {resp.status_code} {resp.text}")
-    return resp.json()["access_token"]
+        print(f"❌ LOGIN FAILED: {resp.status_code} {resp.text}")
+        sys.exit(1)
+    token = resp.json()["access_token"]
+    print(f"✅ Logged in as {USERNAME}")
+    return token
 
-def headers(token: str) -> dict:
+def headers(token):
     """Return authorization headers."""
     return {"Authorization": f"Bearer {token}"}
 
-def cleanup_all(token: str):
-    """Clean up all test data."""
-    print("\n🧹 CLEANUP: Removing test data...")
-    
-    # Delete sales
-    for sale_id in test_sales:
-        try:
-            resp = requests.delete(f"{BASE_URL}/sales/{sale_id}", headers=headers(token))
-            if resp.status_code == 200:
-                print(f"  ✓ Deleted sale {sale_id}")
-        except Exception as e:
-            print(f"  ⚠ Failed to delete sale {sale_id}: {e}")
+def cleanup(token):
+    """Delete all test data created during testing."""
+    print("\n🧹 CLEANUP: Deleting test data...")
+    h = headers(token)
     
     # Delete invoices
-    for inv_id in test_invoices:
-        try:
-            resp = requests.delete(f"{BASE_URL}/invoices/{inv_id}", headers=headers(token))
-            if resp.status_code == 200:
-                print(f"  ✓ Deleted invoice {inv_id}")
-        except Exception as e:
-            print(f"  ⚠ Failed to delete invoice {inv_id}: {e}")
+    for inv_id in created_invoices:
+        resp = requests.delete(f"{BASE_URL}/invoices/{inv_id}", headers=h)
+        if resp.status_code in [200, 204]:
+            print(f"  ✅ Deleted invoice {inv_id}")
+        else:
+            print(f"  ⚠️  Failed to delete invoice {inv_id}: {resp.status_code}")
     
     # Delete receipts
-    for receipt_id in test_receipts:
-        try:
-            resp = requests.delete(f"{BASE_URL}/receipts/{receipt_id}", headers=headers(token))
-            if resp.status_code == 200:
-                print(f"  ✓ Deleted receipt {receipt_id}")
-        except Exception as e:
-            print(f"  ⚠ Failed to delete receipt {receipt_id}: {e}")
+    for rec_id in created_receipts:
+        resp = requests.delete(f"{BASE_URL}/receipts/{rec_id}", headers=h)
+        if resp.status_code in [200, 204]:
+            print(f"  ✅ Deleted receipt {rec_id}")
+        else:
+            print(f"  ⚠️  Failed to delete receipt {rec_id}: {resp.status_code}")
     
     # Delete customers
-    for cust_id in test_customers:
-        try:
-            resp = requests.delete(f"{BASE_URL}/customers/{cust_id}", headers=headers(token))
-            if resp.status_code == 200:
-                print(f"  ✓ Deleted customer {cust_id}")
-        except Exception as e:
-            print(f"  ⚠ Failed to delete customer {cust_id}: {e}")
+    for cust_id in created_customers:
+        resp = requests.delete(f"{BASE_URL}/customers/{cust_id}", headers=h)
+        if resp.status_code in [200, 204]:
+            print(f"  ✅ Deleted customer {cust_id}")
+        else:
+            print(f"  ⚠️  Failed to delete customer {cust_id}: {resp.status_code}")
     
     print("✅ Cleanup complete\n")
 
-def test_scenario_1_setup(token: str):
-    """SCENARIO 1: SETUP - Create customer and advance receipt."""
-    print("\n📋 SCENARIO 1: SETUP - Create customer and advance receipt")
+def test_scenario_1_setup(token):
+    """SCENARIO 1: Create customer and advance receipt."""
+    print("\n" + "="*80)
+    print("SCENARIO 1: SETUP - Create customer + advance receipt")
+    print("="*80)
+    h = headers(token)
     
     # Create customer
-    cust_resp = requests.post(
-        f"{BASE_URL}/customers",
-        headers=headers(token),
-        json={"name": "Alloc Test", "phone": "9994440001", "address": "x"}
-    )
-    if cust_resp.status_code != 200:
-        print(f"❌ FAIL: Customer creation failed: {cust_resp.status_code} {cust_resp.text}")
+    cust_body = {
+        "name": "BalDue Test",
+        "phone": "9993330001",
+        "address": "x"
+    }
+    resp = requests.post(f"{BASE_URL}/customers", json=cust_body, headers=h)
+    if resp.status_code != 200:
+        print(f"❌ FAILED to create customer: {resp.status_code} {resp.text}")
         return None, None
     
-    customer = cust_resp.json()
-    customer_id = customer["id"]
-    test_customers.append(customer_id)
-    print(f"  ✓ Created customer: {customer_id} (name: {customer['name']}, phone: {customer['phone']})")
+    customer = resp.json()
+    cust_id = customer["id"]
+    created_customers.append(cust_id)
+    print(f"✅ Created customer: {customer['name']} (ID: {cust_id})")
     
-    # Create advance receipt
-    receipt_resp = requests.post(
-        f"{BASE_URL}/receipts",
-        headers=headers(token),
-        json={
-            "customer_id": customer_id,
-            "customer_name": "Alloc Test",
-            "customer_mobile": "9994440001",
-            "amount": 1000,
-            "payment_mode": "cash",
-            "source_type": "other"
-        }
-    )
-    if receipt_resp.status_code != 200:
-        print(f"❌ FAIL: Receipt creation failed: {receipt_resp.status_code} {receipt_resp.text}")
-        return customer_id, None
-    
-    receipt = receipt_resp.json()
-    receipt_id = receipt["id"]
-    test_receipts.append(receipt_id)
-    print(f"  ✓ Created advance receipt: {receipt_id} (amount: {receipt['amount']}, source_type: {receipt.get('source_type')})")
-    
-    print("✅ SCENARIO 1: PASS - Setup complete")
-    return customer_id, receipt_id
-
-def test_scenario_2_verify_available(token: str, customer_id: str, receipt_id: str):
-    """SCENARIO 2: VERIFY AVAILABLE - Check advances list shows receipt with allocated=0, remaining=1000."""
-    print("\n📋 SCENARIO 2: VERIFY AVAILABLE - Check advances list")
-    
-    resp = requests.get(
-        f"{BASE_URL}/receipts/advances",
-        headers=headers(token),
-        params={"customer_id": customer_id}
-    )
+    # Create advance receipt (source_type='other', no reference_no)
+    receipt_body = {
+        "customer_id": cust_id,
+        "customer_name": "BalDue Test",
+        "customer_mobile": "9993330001",
+        "amount": 3000,
+        "payment_mode": "cash",
+        "source_type": "other"
+    }
+    resp = requests.post(f"{BASE_URL}/receipts", json=receipt_body, headers=h)
     if resp.status_code != 200:
-        print(f"❌ FAIL: GET /receipts/advances failed: {resp.status_code} {resp.text}")
+        print(f"❌ FAILED to create advance receipt: {resp.status_code} {resp.text}")
+        return cust_id, None
+    
+    receipt = resp.json()
+    receipt_id = receipt["id"]
+    created_receipts.append(receipt_id)
+    print(f"✅ Created advance receipt: {receipt['receipt_no']} (ID: {receipt_id}, amount: {receipt['amount']})")
+    
+    return cust_id, receipt_id
+
+def test_scenario_2_partial_apply(token, cust_id, receipt_id):
+    """SCENARIO 2: Partial advance application (2000 of 3000 on 5000 invoice)."""
+    print("\n" + "="*80)
+    print("SCENARIO 2: PARTIAL APPLY - Apply 2000 of 3000 advance to 5000 invoice")
+    print("="*80)
+    h = headers(token)
+    
+    invoice_body = {
+        "customer_id": cust_id,
+        "customer_name": "BalDue Test",
+        "customer_mobile": "9993330001",
+        "items": [
+            {
+                "name": "Cabinet",
+                "qty": 1,
+                "unit_price": 5000,
+                "unit_cost": 0
+            }
+        ],
+        "advance_allocations": [
+            {
+                "receipt_id": receipt_id,
+                "amount": 2000
+            }
+        ]
+    }
+    
+    resp = requests.post(f"{BASE_URL}/invoices", json=invoice_body, headers=h)
+    if resp.status_code != 200:
+        print(f"❌ FAILED to create invoice: {resp.status_code} {resp.text}")
+        return None
+    
+    invoice = resp.json()
+    inv_id = invoice["id"]
+    created_invoices.append(inv_id)
+    
+    # Verify response fields
+    total = invoice.get("total")
+    advance_applied = invoice.get("advance_applied")
+    balance_due = invoice.get("balance_due")
+    pdf_token = invoice.get("pdf_token")
+    
+    print(f"✅ Created invoice: {invoice['invoice_no']} (ID: {inv_id})")
+    print(f"   Total: {total}")
+    print(f"   Advance applied: {advance_applied}")
+    print(f"   Balance due: {balance_due}")
+    print(f"   PDF token present: {pdf_token is not None}")
+    
+    # Verify expected values
+    errors = []
+    if total != 5000:
+        errors.append(f"Expected total=5000, got {total}")
+    if advance_applied != 2000:
+        errors.append(f"Expected advance_applied=2000, got {advance_applied}")
+    if balance_due != 3000:
+        errors.append(f"Expected balance_due=3000, got {balance_due}")
+    if pdf_token is None:
+        errors.append("Expected pdf_token to be present (non-null)")
+    
+    if errors:
+        print(f"❌ VERIFICATION FAILED:")
+        for err in errors:
+            print(f"   - {err}")
+        return None
+    
+    print("✅ SCENARIO 2 PASSED: All fields correct")
+    return inv_id
+
+def test_scenario_3_list_reflects_fields(token, inv_id):
+    """SCENARIO 3: GET /api/invoices returns advance_applied and balance_due."""
+    print("\n" + "="*80)
+    print("SCENARIO 3: LIST REFLECTS FIELDS - Verify fields in GET /api/invoices")
+    print("="*80)
+    h = headers(token)
+    
+    resp = requests.get(f"{BASE_URL}/invoices", headers=h)
+    if resp.status_code != 200:
+        print(f"❌ FAILED to list invoices: {resp.status_code} {resp.text}")
+        return False
+    
+    invoices = resp.json()
+    target_invoice = None
+    for inv in invoices:
+        if inv["id"] == inv_id:
+            target_invoice = inv
+            break
+    
+    if not target_invoice:
+        print(f"❌ FAILED: Invoice {inv_id} not found in list")
+        return False
+    
+    advance_applied = target_invoice.get("advance_applied")
+    balance_due = target_invoice.get("balance_due")
+    
+    print(f"✅ Found invoice in list: {target_invoice['invoice_no']}")
+    print(f"   Advance applied: {advance_applied}")
+    print(f"   Balance due: {balance_due}")
+    
+    errors = []
+    if advance_applied != 2000:
+        errors.append(f"Expected advance_applied=2000, got {advance_applied}")
+    if balance_due != 3000:
+        errors.append(f"Expected balance_due=3000, got {balance_due}")
+    
+    if errors:
+        print(f"❌ VERIFICATION FAILED:")
+        for err in errors:
+            print(f"   - {err}")
+        return False
+    
+    print("✅ SCENARIO 3 PASSED: Fields present in list")
+    return True
+
+def test_scenario_4_advance_remaining(token, cust_id, receipt_id):
+    """SCENARIO 4: Verify advance remaining balance (allocated=2000, remaining=1000)."""
+    print("\n" + "="*80)
+    print("SCENARIO 4: ADVANCE REMAINING - Verify receipt shows allocated=2000, remaining=1000")
+    print("="*80)
+    h = headers(token)
+    
+    resp = requests.get(f"{BASE_URL}/receipts/advances?customer_id={cust_id}", headers=h)
+    if resp.status_code != 200:
+        print(f"❌ FAILED to get advances: {resp.status_code} {resp.text}")
         return False
     
     data = resp.json()
-    print(f"  Response: count={data.get('count')}, total_amount={data.get('total_amount')}")
+    advances = data.get("advances", [])
     
-    # Verify structure
-    if "advances" not in data or "count" not in data or "total_amount" not in data:
-        print(f"❌ FAIL: Missing required fields in response")
-        return False
-    
-    # Find our receipt
-    receipt_found = None
-    for adv in data["advances"]:
+    target_receipt = None
+    for adv in advances:
         if adv["id"] == receipt_id:
-            receipt_found = adv
+            target_receipt = adv
             break
     
-    if not receipt_found:
-        print(f"❌ FAIL: Receipt {receipt_id} not found in advances list")
+    if not target_receipt:
+        print(f"❌ FAILED: Receipt {receipt_id} not found in advances list")
         return False
     
-    # Verify allocated=0, remaining=1000
-    allocated = receipt_found.get("allocated", -1)
-    remaining = receipt_found.get("remaining", -1)
+    allocated = target_receipt.get("allocated")
+    remaining = target_receipt.get("remaining")
     
-    print(f"  Receipt found: allocated={allocated}, remaining={remaining}")
+    print(f"✅ Found receipt in advances: {target_receipt['receipt_no']}")
+    print(f"   Allocated: {allocated}")
+    print(f"   Remaining: {remaining}")
     
-    if allocated != 0:
-        print(f"❌ FAIL: Expected allocated=0, got {allocated}")
+    errors = []
+    if allocated != 2000:
+        errors.append(f"Expected allocated=2000, got {allocated}")
+    if remaining != 1000:
+        errors.append(f"Expected remaining=1000, got {remaining}")
+    
+    if errors:
+        print(f"❌ VERIFICATION FAILED:")
+        for err in errors:
+            print(f"   - {err}")
         return False
+    
+    print("✅ SCENARIO 4 PASSED: Advance remaining balance correct")
+    return True
+
+def test_scenario_5_full_apply(token, cust_id):
+    """SCENARIO 5: Full advance application (exact match: 4000 advance on 4000 invoice)."""
+    print("\n" + "="*80)
+    print("SCENARIO 5: FULL APPLY (EXACT) - Apply 4000 advance to 4000 invoice")
+    print("="*80)
+    h = headers(token)
+    
+    # Create another advance receipt (amount=4000)
+    receipt_body = {
+        "customer_id": cust_id,
+        "customer_name": "BalDue Test",
+        "customer_mobile": "9993330001",
+        "amount": 4000,
+        "payment_mode": "cash",
+        "source_type": "other"
+    }
+    resp = requests.post(f"{BASE_URL}/receipts", json=receipt_body, headers=h)
+    if resp.status_code != 200:
+        print(f"❌ FAILED to create advance receipt: {resp.status_code} {resp.text}")
+        return False
+    
+    receipt = resp.json()
+    receipt_id2 = receipt["id"]
+    created_receipts.append(receipt_id2)
+    print(f"✅ Created advance receipt: {receipt['receipt_no']} (ID: {receipt_id2}, amount: {receipt['amount']})")
+    
+    # Create invoice with items totalling 4000
+    invoice_body = {
+        "customer_id": cust_id,
+        "customer_name": "BalDue Test",
+        "customer_mobile": "9993330001",
+        "items": [
+            {
+                "name": "Door",
+                "qty": 1,
+                "unit_price": 4000,
+                "unit_cost": 0
+            }
+        ],
+        "advance_allocations": [
+            {
+                "receipt_id": receipt_id2,
+                "amount": 4000
+            }
+        ]
+    }
+    
+    resp = requests.post(f"{BASE_URL}/invoices", json=invoice_body, headers=h)
+    if resp.status_code != 200:
+        print(f"❌ FAILED to create invoice: {resp.status_code} {resp.text}")
+        return False
+    
+    invoice = resp.json()
+    inv_id = invoice["id"]
+    created_invoices.append(inv_id)
+    
+    total = invoice.get("total")
+    advance_applied = invoice.get("advance_applied")
+    balance_due = invoice.get("balance_due")
+    
+    print(f"✅ Created invoice: {invoice['invoice_no']} (ID: {inv_id})")
+    print(f"   Total: {total}")
+    print(f"   Advance applied: {advance_applied}")
+    print(f"   Balance due: {balance_due}")
+    
+    errors = []
+    if total != 4000:
+        errors.append(f"Expected total=4000, got {total}")
+    if advance_applied != 4000:
+        errors.append(f"Expected advance_applied=4000, got {advance_applied}")
+    if balance_due != 0:
+        errors.append(f"Expected balance_due=0, got {balance_due}")
+    
+    if errors:
+        print(f"❌ VERIFICATION FAILED:")
+        for err in errors:
+            print(f"   - {err}")
+        return False
+    
+    print("✅ SCENARIO 5 PASSED: Full advance application (exact match)")
+    return True
+
+def test_scenario_6_over_apply_cap(token, cust_id):
+    """SCENARIO 6: Over-apply cap (10000 advance, apply 9000 to 6000 invoice)."""
+    print("\n" + "="*80)
+    print("SCENARIO 6: OVER-APPLY CAP - Apply 9000 of 10000 advance to 6000 invoice")
+    print("="*80)
+    h = headers(token)
+    
+    # Create advance receipt (amount=10000)
+    receipt_body = {
+        "customer_id": cust_id,
+        "customer_name": "BalDue Test",
+        "customer_mobile": "9993330001",
+        "amount": 10000,
+        "payment_mode": "cash",
+        "source_type": "other"
+    }
+    resp = requests.post(f"{BASE_URL}/receipts", json=receipt_body, headers=h)
+    if resp.status_code != 200:
+        print(f"❌ FAILED to create advance receipt: {resp.status_code} {resp.text}")
+        return False
+    
+    receipt = resp.json()
+    receipt_id3 = receipt["id"]
+    created_receipts.append(receipt_id3)
+    print(f"✅ Created advance receipt: {receipt['receipt_no']} (ID: {receipt_id3}, amount: {receipt['amount']})")
+    
+    # Create invoice with items totalling 6000, try to apply 9000
+    invoice_body = {
+        "customer_id": cust_id,
+        "customer_name": "BalDue Test",
+        "customer_mobile": "9993330001",
+        "items": [
+            {
+                "name": "Table",
+                "qty": 1,
+                "unit_price": 6000,
+                "unit_cost": 0
+            }
+        ],
+        "advance_allocations": [
+            {
+                "receipt_id": receipt_id3,
+                "amount": 9000
+            }
+        ]
+    }
+    
+    resp = requests.post(f"{BASE_URL}/invoices", json=invoice_body, headers=h)
+    if resp.status_code != 200:
+        print(f"❌ FAILED to create invoice: {resp.status_code} {resp.text}")
+        return False
+    
+    invoice = resp.json()
+    inv_id = invoice["id"]
+    created_invoices.append(inv_id)
+    
+    total = invoice.get("total")
+    advance_applied = invoice.get("advance_applied")
+    balance_due = invoice.get("balance_due")
+    
+    print(f"✅ Created invoice: {invoice['invoice_no']} (ID: {inv_id})")
+    print(f"   Total: {total}")
+    print(f"   Advance applied: {advance_applied}")
+    print(f"   Balance due: {balance_due}")
+    
+    # Note: balance_due = total - advance_applied = 6000 - 9000 = -3000 (negative is acceptable)
+    errors = []
+    if total != 6000:
+        errors.append(f"Expected total=6000, got {total}")
+    if advance_applied != 9000:
+        errors.append(f"Expected advance_applied=9000 (capped at min(9000, remaining 10000)), got {advance_applied}")
+    if balance_due != -3000:
+        errors.append(f"Expected balance_due=-3000 (6000-9000), got {balance_due}")
+    
+    if errors:
+        print(f"❌ VERIFICATION FAILED:")
+        for err in errors:
+            print(f"   - {err}")
+        return False
+    
+    # Verify receipt remaining
+    resp = requests.get(f"{BASE_URL}/receipts/advances?customer_id={cust_id}", headers=h)
+    if resp.status_code != 200:
+        print(f"❌ FAILED to get advances: {resp.status_code} {resp.text}")
+        return False
+    
+    data = resp.json()
+    advances = data.get("advances", [])
+    target_receipt = None
+    for adv in advances:
+        if adv["id"] == receipt_id3:
+            target_receipt = adv
+            break
+    
+    if not target_receipt:
+        print(f"❌ FAILED: Receipt {receipt_id3} not found in advances list")
+        return False
+    
+    remaining = target_receipt.get("remaining")
+    print(f"   Receipt remaining: {remaining}")
     
     if remaining != 1000:
-        print(f"❌ FAIL: Expected remaining=1000, got {remaining}")
+        print(f"❌ VERIFICATION FAILED: Expected remaining=1000 (10000-9000), got {remaining}")
         return False
     
-    if data["count"] < 1:
-        print(f"❌ FAIL: Expected count >= 1, got {data['count']}")
-        return False
-    
-    if data["total_amount"] < 1000:
-        print(f"❌ FAIL: Expected total_amount >= 1000, got {data['total_amount']}")
-        return False
-    
-    print("✅ SCENARIO 2: PASS - Advances list correct (allocated=0, remaining=1000)")
+    print("✅ SCENARIO 6 PASSED: Over-apply capped correctly, balance_due negative as expected")
     return True
 
-def test_scenario_3_partial_on_sale(token: str, customer_id: str, receipt_id: str):
-    """SCENARIO 3: PARTIAL ON SALE - Apply 400 to a sale, verify linked_receipts."""
-    print("\n📋 SCENARIO 3: PARTIAL ON SALE - Apply 400 to a sale")
+def test_scenario_7_no_advance(token):
+    """SCENARIO 7: No advance (regression) - invoice without advance fields."""
+    print("\n" + "="*80)
+    print("SCENARIO 7: NO ADVANCE (REGRESSION) - Invoice without advance")
+    print("="*80)
+    h = headers(token)
     
-    # Create sale with partial advance allocation
-    sale_resp = requests.post(
-        f"{BASE_URL}/sales",
-        headers=headers(token),
-        json={
-            "customer_id": customer_id,
-            "customer_name": "Alloc Test",
-            "amount": 2000,
-            "advance_allocations": [{"receipt_id": receipt_id, "amount": 400}]
-        }
-    )
-    if sale_resp.status_code != 200:
-        print(f"❌ FAIL: Sale creation failed: {sale_resp.status_code} {sale_resp.text}")
-        return None
-    
-    sale = sale_resp.json()
-    sale_id = sale["id"]
-    test_sales.append(sale_id)
-    print(f"  ✓ Created sale: {sale_id} (amount: {sale['amount']})")
-    
-    # Get sales list to verify linked_receipts
-    sales_resp = requests.get(
-        f"{BASE_URL}/sales",
-        headers=headers(token),
-        params={"scope": "all"}
-    )
-    if sales_resp.status_code != 200:
-        print(f"❌ FAIL: GET /sales failed: {sales_resp.status_code} {sales_resp.text}")
-        return sale_id
-    
-    sales = sales_resp.json()
-    sale_found = None
-    for s in sales:
-        if s["id"] == sale_id:
-            sale_found = s
-            break
-    
-    if not sale_found:
-        print(f"❌ FAIL: Sale {sale_id} not found in sales list")
-        return sale_id
-    
-    # Verify linked_receipts contains advance entry
-    linked_receipts = sale_found.get("linked_receipts", [])
-    print(f"  Sale has {len(linked_receipts)} linked_receipts")
-    
-    advance_found = None
-    for lr in linked_receipts:
-        if lr.get("is_advance") and lr.get("source_type") == "advance":
-            advance_found = lr
-            break
-    
-    if not advance_found:
-        print(f"❌ FAIL: No advance entry found in linked_receipts")
-        print(f"  linked_receipts: {json.dumps(linked_receipts, indent=2)}")
-        return sale_id
-    
-    # Verify amount=400
-    if advance_found.get("amount") != 400:
-        print(f"❌ FAIL: Expected advance amount=400, got {advance_found.get('amount')}")
-        return sale_id
-    
-    # Verify receipt_no is set
-    if not advance_found.get("receipt_no"):
-        print(f"❌ FAIL: receipt_no not set on advance entry")
-        return sale_id
-    
-    print(f"  ✓ Advance entry found: amount={advance_found['amount']}, receipt_no={advance_found['receipt_no']}, is_advance={advance_found['is_advance']}")
-    print("✅ SCENARIO 3: PASS - Partial advance applied to sale correctly")
-    return sale_id
-
-def test_scenario_4_remaining_still_listed(token: str, customer_id: str, receipt_id: str):
-    """SCENARIO 4: REMAINING STILL LISTED - Check advances shows allocated=400, remaining=600."""
-    print("\n📋 SCENARIO 4: REMAINING STILL LISTED - Check advances after partial use")
-    
-    resp = requests.get(
-        f"{BASE_URL}/receipts/advances",
-        headers=headers(token),
-        params={"customer_id": customer_id}
-    )
+    # Create fresh customer
+    cust_body = {
+        "name": "NoAdvance Test",
+        "phone": "9993330002",
+        "address": "y"
+    }
+    resp = requests.post(f"{BASE_URL}/customers", json=cust_body, headers=h)
     if resp.status_code != 200:
-        print(f"❌ FAIL: GET /receipts/advances failed: {resp.status_code} {resp.text}")
+        print(f"❌ FAILED to create customer: {resp.status_code} {resp.text}")
         return False
     
-    data = resp.json()
+    customer = resp.json()
+    cust_id = customer["id"]
+    created_customers.append(cust_id)
+    print(f"✅ Created customer: {customer['name']} (ID: {cust_id})")
     
-    # Find our receipt
-    receipt_found = None
-    for adv in data["advances"]:
-        if adv["id"] == receipt_id:
-            receipt_found = adv
-            break
+    # Create invoice without advance fields
+    invoice_body = {
+        "customer_id": cust_id,
+        "customer_name": "NoAdvance Test",
+        "customer_mobile": "9993330002",
+        "items": [
+            {
+                "name": "Chair",
+                "qty": 2,
+                "unit_price": 1500,
+                "unit_cost": 0
+            }
+        ]
+    }
     
-    if not receipt_found:
-        print(f"❌ FAIL: Receipt {receipt_id} not found in advances list (should still be there with remaining=600)")
-        return False
-    
-    # Verify allocated=400, remaining=600
-    allocated = receipt_found.get("allocated", -1)
-    remaining = receipt_found.get("remaining", -1)
-    
-    print(f"  Receipt found: allocated={allocated}, remaining={remaining}")
-    
-    if allocated != 400:
-        print(f"❌ FAIL: Expected allocated=400, got {allocated}")
-        return False
-    
-    if remaining != 600:
-        print(f"❌ FAIL: Expected remaining=600, got {remaining}")
-        return False
-    
-    # Verify total_amount reflects remaining (not original amount)
-    if data["total_amount"] < 600:
-        print(f"❌ FAIL: Expected total_amount >= 600, got {data['total_amount']}")
-        return False
-    
-    print("✅ SCENARIO 4: PASS - Receipt still listed with allocated=400, remaining=600")
-    return True
-
-def test_scenario_5_rest_on_invoice(token: str, customer_id: str, receipt_id: str):
-    """SCENARIO 5: REST ON INVOICE - Apply remaining 600 to invoice."""
-    print("\n📋 SCENARIO 5: REST ON INVOICE - Apply remaining 600 to invoice")
-    
-    # Create invoice with remaining advance allocation
-    inv_resp = requests.post(
-        f"{BASE_URL}/invoices",
-        headers=headers(token),
-        json={
-            "customer_id": customer_id,
-            "customer_name": "Alloc Test",
-            "customer_mobile": "9994440001",
-            "items": [{"name": "Item", "qty": 1, "unit_price": 5000, "unit_cost": 0}],
-            "advance_allocations": [{"receipt_id": receipt_id, "amount": 600}]
-        }
-    )
-    if inv_resp.status_code != 200:
-        print(f"❌ FAIL: Invoice creation failed: {inv_resp.status_code} {inv_resp.text}")
-        return None
-    
-    invoice = inv_resp.json()
-    invoice_id = invoice["id"]
-    invoice_no = invoice.get("invoice_no")
-    test_invoices.append(invoice_id)
-    print(f"  ✓ Created invoice: {invoice_id} (invoice_no: {invoice_no}, total: {invoice.get('total')})")
-    
-    # Get invoices list to verify linked_receipts
-    inv_list_resp = requests.get(
-        f"{BASE_URL}/invoices",
-        headers=headers(token)
-    )
-    if inv_list_resp.status_code != 200:
-        print(f"❌ FAIL: GET /invoices failed: {inv_list_resp.status_code} {inv_list_resp.text}")
-        return invoice_id
-    
-    invoices = inv_list_resp.json()
-    invoice_found = None
-    for inv in invoices:
-        if inv["id"] == invoice_id:
-            invoice_found = inv
-            break
-    
-    if not invoice_found:
-        print(f"❌ FAIL: Invoice {invoice_id} not found in invoices list")
-        return invoice_id
-    
-    # Verify linked_receipts contains advance entry
-    linked_receipts = invoice_found.get("linked_receipts", [])
-    print(f"  Invoice has {len(linked_receipts)} linked_receipts")
-    
-    advance_found = None
-    for lr in linked_receipts:
-        if lr.get("is_advance") and lr.get("source_type") == "advance":
-            advance_found = lr
-            break
-    
-    if not advance_found:
-        print(f"❌ FAIL: No advance entry found in invoice linked_receipts")
-        print(f"  linked_receipts: {json.dumps(linked_receipts, indent=2)}")
-        return invoice_id
-    
-    # Verify amount=600
-    if advance_found.get("amount") != 600:
-        print(f"❌ FAIL: Expected advance amount=600, got {advance_found.get('amount')}")
-        return invoice_id
-    
-    print(f"  ✓ Advance entry found: amount={advance_found['amount']}, is_advance={advance_found['is_advance']}")
-    print("✅ SCENARIO 5: PASS - Remaining 600 applied to invoice correctly")
-    return invoice_id
-
-def test_scenario_6_fully_consumed(token: str, customer_id: str, receipt_id: str):
-    """SCENARIO 6: FULLY CONSUMED - Check receipt no longer appears in advances."""
-    print("\n📋 SCENARIO 6: FULLY CONSUMED - Check receipt no longer in advances list")
-    
-    resp = requests.get(
-        f"{BASE_URL}/receipts/advances",
-        headers=headers(token),
-        params={"customer_id": customer_id}
-    )
+    resp = requests.post(f"{BASE_URL}/invoices", json=invoice_body, headers=h)
     if resp.status_code != 200:
-        print(f"❌ FAIL: GET /receipts/advances failed: {resp.status_code} {resp.text}")
+        print(f"❌ FAILED to create invoice: {resp.status_code} {resp.text}")
         return False
     
-    data = resp.json()
+    invoice = resp.json()
+    inv_id = invoice["id"]
+    created_invoices.append(inv_id)
     
-    # Verify receipt is NOT in the list
-    receipt_found = None
-    for adv in data["advances"]:
-        if adv["id"] == receipt_id:
-            receipt_found = adv
-            break
+    total = invoice.get("total")
+    advance_applied = invoice.get("advance_applied")
+    balance_due = invoice.get("balance_due")
+    pdf_token = invoice.get("pdf_token")
     
-    if receipt_found:
-        print(f"❌ FAIL: Receipt {receipt_id} still appears in advances list (should be gone, remaining=0)")
-        print(f"  Receipt data: allocated={receipt_found.get('allocated')}, remaining={receipt_found.get('remaining')}")
+    print(f"✅ Created invoice: {invoice['invoice_no']} (ID: {inv_id})")
+    print(f"   Total: {total}")
+    print(f"   Advance applied: {advance_applied}")
+    print(f"   Balance due: {balance_due}")
+    print(f"   PDF token present: {pdf_token is not None}")
+    
+    errors = []
+    if total != 3000:
+        errors.append(f"Expected total=3000 (2*1500), got {total}")
+    if advance_applied != 0:
+        errors.append(f"Expected advance_applied=0, got {advance_applied}")
+    if balance_due != total:
+        errors.append(f"Expected balance_due={total}, got {balance_due}")
+    if pdf_token is None:
+        errors.append("Expected pdf_token to be present (non-null)")
+    
+    if errors:
+        print(f"❌ VERIFICATION FAILED:")
+        for err in errors:
+            print(f"   - {err}")
         return False
     
-    print(f"  ✓ Receipt {receipt_id} correctly removed from advances list (fully consumed)")
-    print(f"  Current advances count: {data['count']}, total_amount: {data['total_amount']}")
-    print("✅ SCENARIO 6: PASS - Fully consumed receipt no longer listed")
+    print("✅ SCENARIO 7 PASSED: No advance regression test passed")
     return True
 
-def test_scenario_7_over_allocation_cap(token: str):
-    """SCENARIO 7: OVER-ALLOCATION CAP - Test capping at available amount."""
-    print("\n📋 SCENARIO 7: OVER-ALLOCATION CAP - Test amount capping")
+def test_scenario_8_legacy_attach_receipt_ids(token):
+    """SCENARIO 8: Legacy attach_receipt_ids (full advance application)."""
+    print("\n" + "="*80)
+    print("SCENARIO 8: LEGACY attach_receipt_ids - Full advance application")
+    print("="*80)
+    h = headers(token)
     
-    # Create a fresh customer and advance
-    cust_resp = requests.post(
-        f"{BASE_URL}/customers",
-        headers=headers(token),
-        json={"name": "Cap Test", "phone": "9994440002", "address": "x"}
-    )
-    if cust_resp.status_code != 200:
-        print(f"❌ FAIL: Customer creation failed: {cust_resp.status_code} {cust_resp.text}")
+    # Create customer
+    cust_body = {
+        "name": "Legacy Test",
+        "phone": "9993330003",
+        "address": "z"
+    }
+    resp = requests.post(f"{BASE_URL}/customers", json=cust_body, headers=h)
+    if resp.status_code != 200:
+        print(f"❌ FAILED to create customer: {resp.status_code} {resp.text}")
         return False
     
-    customer = cust_resp.json()
-    customer_id = customer["id"]
-    test_customers.append(customer_id)
+    customer = resp.json()
+    cust_id = customer["id"]
+    created_customers.append(cust_id)
+    print(f"✅ Created customer: {customer['name']} (ID: {cust_id})")
     
-    # Create advance with amount=500
-    receipt_resp = requests.post(
-        f"{BASE_URL}/receipts",
-        headers=headers(token),
-        json={
-            "customer_id": customer_id,
-            "customer_name": "Cap Test",
-            "customer_mobile": "9994440002",
-            "amount": 500,
-            "payment_mode": "cash",
-            "source_type": "other"
-        }
-    )
-    if receipt_resp.status_code != 200:
-        print(f"❌ FAIL: Receipt creation failed: {receipt_resp.status_code} {receipt_resp.text}")
+    # Create advance receipt (amount=1500)
+    receipt_body = {
+        "customer_id": cust_id,
+        "customer_name": "Legacy Test",
+        "customer_mobile": "9993330003",
+        "amount": 1500,
+        "payment_mode": "cash",
+        "source_type": "other"
+    }
+    resp = requests.post(f"{BASE_URL}/receipts", json=receipt_body, headers=h)
+    if resp.status_code != 200:
+        print(f"❌ FAILED to create advance receipt: {resp.status_code} {resp.text}")
         return False
     
-    receipt = receipt_resp.json()
+    receipt = resp.json()
     receipt_id = receipt["id"]
-    test_receipts.append(receipt_id)
-    print(f"  ✓ Created advance: {receipt_id} (amount: 500)")
+    created_receipts.append(receipt_id)
+    print(f"✅ Created advance receipt: {receipt['receipt_no']} (ID: {receipt_id}, amount: {receipt['amount']})")
     
-    # Try to apply 900 (more than available)
-    sale_resp = requests.post(
-        f"{BASE_URL}/sales",
-        headers=headers(token),
-        json={
-            "customer_id": customer_id,
-            "customer_name": "Cap Test",
-            "amount": 2000,
-            "advance_allocations": [{"receipt_id": receipt_id, "amount": 900}]
-        }
-    )
-    if sale_resp.status_code != 200:
-        print(f"❌ FAIL: Sale creation failed: {sale_resp.status_code} {sale_resp.text}")
+    # Create invoice with items totalling 5000, use legacy attach_receipt_ids
+    invoice_body = {
+        "customer_id": cust_id,
+        "customer_name": "Legacy Test",
+        "customer_mobile": "9993330003",
+        "items": [
+            {
+                "name": "Sofa",
+                "qty": 1,
+                "unit_price": 5000,
+                "unit_cost": 0
+            }
+        ],
+        "attach_receipt_ids": [receipt_id]  # Legacy: applies full remaining
+    }
+    
+    resp = requests.post(f"{BASE_URL}/invoices", json=invoice_body, headers=h)
+    if resp.status_code != 200:
+        print(f"❌ FAILED to create invoice: {resp.status_code} {resp.text}")
         return False
     
-    sale = sale_resp.json()
-    sale_id = sale["id"]
-    test_sales.append(sale_id)
-    print(f"  ✓ Created sale: {sale_id} (requested advance: 900)")
+    invoice = resp.json()
+    inv_id = invoice["id"]
+    created_invoices.append(inv_id)
     
-    # Get sale to verify linked advance amount is capped at 500
-    sales_resp = requests.get(
-        f"{BASE_URL}/sales",
-        headers=headers(token),
-        params={"scope": "all"}
-    )
-    if sales_resp.status_code != 200:
-        print(f"❌ FAIL: GET /sales failed: {sales_resp.status_code} {sales_resp.text}")
+    total = invoice.get("total")
+    advance_applied = invoice.get("advance_applied")
+    balance_due = invoice.get("balance_due")
+    
+    print(f"✅ Created invoice: {invoice['invoice_no']} (ID: {inv_id})")
+    print(f"   Total: {total}")
+    print(f"   Advance applied: {advance_applied}")
+    print(f"   Balance due: {balance_due}")
+    
+    errors = []
+    if total != 5000:
+        errors.append(f"Expected total=5000, got {total}")
+    if advance_applied != 1500:
+        errors.append(f"Expected advance_applied=1500 (full remaining applied), got {advance_applied}")
+    if balance_due != 3500:
+        errors.append(f"Expected balance_due=3500 (5000-1500), got {balance_due}")
+    
+    if errors:
+        print(f"❌ VERIFICATION FAILED:")
+        for err in errors:
+            print(f"   - {err}")
         return False
     
-    sales = sales_resp.json()
-    sale_found = None
-    for s in sales:
-        if s["id"] == sale_id:
-            sale_found = s
-            break
-    
-    if not sale_found:
-        print(f"❌ FAIL: Sale {sale_id} not found")
-        return False
-    
-    # Find advance in linked_receipts
-    linked_receipts = sale_found.get("linked_receipts", [])
-    advance_found = None
-    for lr in linked_receipts:
-        if lr.get("is_advance"):
-            advance_found = lr
-            break
-    
-    if not advance_found:
-        print(f"❌ FAIL: No advance entry found in linked_receipts")
-        return False
-    
-    # Verify amount is capped at 500 (not 900)
-    if advance_found.get("amount") != 500:
-        print(f"❌ FAIL: Expected advance amount=500 (capped), got {advance_found.get('amount')}")
-        return False
-    
-    print(f"  ✓ Advance amount correctly capped at 500 (requested 900)")
-    
-    # Verify receipt is fully consumed
-    adv_resp = requests.get(
-        f"{BASE_URL}/receipts/advances",
-        headers=headers(token),
-        params={"customer_id": customer_id}
-    )
-    if adv_resp.status_code != 200:
-        print(f"❌ FAIL: GET /receipts/advances failed: {adv_resp.status_code} {adv_resp.text}")
-        return False
-    
-    adv_data = adv_resp.json()
-    receipt_found = None
-    for adv in adv_data["advances"]:
-        if adv["id"] == receipt_id:
-            receipt_found = adv
-            break
-    
-    if receipt_found:
-        print(f"❌ FAIL: Receipt still in advances list (should be gone, remaining=0)")
-        print(f"  Receipt: allocated={receipt_found.get('allocated')}, remaining={receipt_found.get('remaining')}")
-        return False
-    
-    print(f"  ✓ Receipt correctly removed from advances (remaining=0)")
-    print("✅ SCENARIO 7: PASS - Over-allocation correctly capped at available amount")
+    print("✅ SCENARIO 8 PASSED: Legacy attach_receipt_ids works correctly")
     return True
 
-def test_scenario_8_cross_customer_safety(token: str):
-    """SCENARIO 8: CROSS-CUSTOMER SAFETY - Test mismatched customer receipts are ignored."""
-    print("\n📋 SCENARIO 8: CROSS-CUSTOMER SAFETY - Test cross-customer receipt rejection")
+def test_scenario_9_regression(token, cust_id):
+    """SCENARIO 9: Regression checks - other endpoints still work."""
+    print("\n" + "="*80)
+    print("SCENARIO 9: REGRESSION - Verify other endpoints still work")
+    print("="*80)
+    h = headers(token)
     
-    # Create customer 1
-    cust1_resp = requests.post(
-        f"{BASE_URL}/customers",
-        headers=headers(token),
-        json={"name": "Customer 1", "phone": "9994440003", "address": "x"}
-    )
-    if cust1_resp.status_code != 200:
-        print(f"❌ FAIL: Customer 1 creation failed: {cust1_resp.status_code} {cust1_resp.text}")
-        return False
+    errors = []
     
-    customer1 = cust1_resp.json()
-    customer1_id = customer1["id"]
-    test_customers.append(customer1_id)
+    # Test GET /api/sales
+    resp = requests.get(f"{BASE_URL}/sales", headers=h)
+    if resp.status_code != 200:
+        errors.append(f"GET /api/sales failed: {resp.status_code}")
+    else:
+        print(f"✅ GET /api/sales: 200 OK")
     
-    # Create customer 2
-    cust2_resp = requests.post(
-        f"{BASE_URL}/customers",
-        headers=headers(token),
-        json={"name": "Customer 2", "phone": "9994440004", "address": "x"}
-    )
-    if cust2_resp.status_code != 200:
-        print(f"❌ FAIL: Customer 2 creation failed: {cust2_resp.status_code} {cust2_resp.text}")
-        return False
+    # Test GET /api/stats/sales-today
+    resp = requests.get(f"{BASE_URL}/stats/sales-today", headers=h)
+    if resp.status_code != 200:
+        errors.append(f"GET /api/stats/sales-today failed: {resp.status_code}")
+    else:
+        print(f"✅ GET /api/stats/sales-today: 200 OK")
     
-    customer2 = cust2_resp.json()
-    customer2_id = customer2["id"]
-    test_customers.append(customer2_id)
+    # Test GET /api/deliveries
+    resp = requests.get(f"{BASE_URL}/deliveries", headers=h)
+    if resp.status_code != 200:
+        errors.append(f"GET /api/deliveries failed: {resp.status_code}")
+    else:
+        print(f"✅ GET /api/deliveries: 200 OK")
     
-    print(f"  ✓ Created customer 1: {customer1_id}")
-    print(f"  ✓ Created customer 2: {customer2_id}")
-    
-    # Create advance for customer 2
-    receipt_resp = requests.post(
-        f"{BASE_URL}/receipts",
-        headers=headers(token),
-        json={
-            "customer_id": customer2_id,
-            "customer_name": "Customer 2",
-            "customer_mobile": "9994440004",
-            "amount": 800,
-            "payment_mode": "cash",
-            "source_type": "other"
-        }
-    )
-    if receipt_resp.status_code != 200:
-        print(f"❌ FAIL: Receipt creation failed: {receipt_resp.status_code} {receipt_resp.text}")
-        return False
-    
-    receipt = receipt_resp.json()
-    receipt_id = receipt["id"]
-    test_receipts.append(receipt_id)
-    print(f"  ✓ Created advance for customer 2: {receipt_id} (amount: 800)")
-    
-    # Try to create sale for customer 1 with customer 2's receipt
-    sale_resp = requests.post(
-        f"{BASE_URL}/sales",
-        headers=headers(token),
-        json={
-            "customer_id": customer1_id,
-            "customer_name": "Customer 1",
-            "amount": 1500,
-            "advance_allocations": [{"receipt_id": receipt_id, "amount": 500}]
-        }
-    )
-    if sale_resp.status_code != 200:
-        print(f"❌ FAIL: Sale creation failed: {sale_resp.status_code} {sale_resp.text}")
-        return False
-    
-    sale = sale_resp.json()
-    sale_id = sale["id"]
-    test_sales.append(sale_id)
-    print(f"  ✓ Created sale for customer 1: {sale_id} (with customer 2's receipt)")
-    
-    # Verify sale has NO advance linked
-    sales_resp = requests.get(
-        f"{BASE_URL}/sales",
-        headers=headers(token),
-        params={"scope": "all"}
-    )
-    if sales_resp.status_code != 200:
-        print(f"❌ FAIL: GET /sales failed: {sales_resp.status_code} {sales_resp.text}")
-        return False
-    
-    sales = sales_resp.json()
-    sale_found = None
-    for s in sales:
-        if s["id"] == sale_id:
-            sale_found = s
-            break
-    
-    if not sale_found:
-        print(f"❌ FAIL: Sale {sale_id} not found")
-        return False
-    
-    # Verify NO advance in linked_receipts
-    linked_receipts = sale_found.get("linked_receipts", [])
-    advance_found = None
-    for lr in linked_receipts:
-        if lr.get("is_advance"):
-            advance_found = lr
-            break
-    
-    if advance_found:
-        print(f"❌ FAIL: Mismatched receipt was incorrectly linked to sale")
-        print(f"  Advance entry: {json.dumps(advance_found, indent=2)}")
-        return False
-    
-    print(f"  ✓ Sale has no advance linked (mismatched receipt correctly ignored)")
-    
-    # Verify customer 2's receipt is still fully available
-    adv_resp = requests.get(
-        f"{BASE_URL}/receipts/advances",
-        headers=headers(token),
-        params={"customer_id": customer2_id}
-    )
-    if adv_resp.status_code != 200:
-        print(f"❌ FAIL: GET /receipts/advances failed: {adv_resp.status_code} {adv_resp.text}")
-        return False
-    
-    adv_data = adv_resp.json()
-    receipt_found = None
-    for adv in adv_data["advances"]:
-        if adv["id"] == receipt_id:
-            receipt_found = adv
-            break
-    
-    if not receipt_found:
-        print(f"❌ FAIL: Customer 2's receipt not found in advances (should still be there)")
-        return False
-    
-    if receipt_found.get("remaining") != 800:
-        print(f"❌ FAIL: Expected remaining=800, got {receipt_found.get('remaining')}")
-        return False
-    
-    print(f"  ✓ Customer 2's receipt still fully available (remaining=800)")
-    print("✅ SCENARIO 8: PASS - Cross-customer receipts correctly ignored")
-    return True
-
-def test_scenario_9_legacy_attach_receipt_ids(token: str):
-    """SCENARIO 9: LEGACY attach_receipt_ids REGRESSION - Test old field still works."""
-    print("\n📋 SCENARIO 9: LEGACY attach_receipt_ids - Test backward compatibility")
-    
-    # Create customer and advance
-    cust_resp = requests.post(
-        f"{BASE_URL}/customers",
-        headers=headers(token),
-        json={"name": "Legacy Test", "phone": "9994440005", "address": "x"}
-    )
-    if cust_resp.status_code != 200:
-        print(f"❌ FAIL: Customer creation failed: {cust_resp.status_code} {cust_resp.text}")
-        return False
-    
-    customer = cust_resp.json()
-    customer_id = customer["id"]
-    test_customers.append(customer_id)
-    
-    receipt_resp = requests.post(
-        f"{BASE_URL}/receipts",
-        headers=headers(token),
-        json={
-            "customer_id": customer_id,
-            "customer_name": "Legacy Test",
-            "customer_mobile": "9994440005",
-            "amount": 300,
-            "payment_mode": "cash",
-            "source_type": "other"
-        }
-    )
-    if receipt_resp.status_code != 200:
-        print(f"❌ FAIL: Receipt creation failed: {receipt_resp.status_code} {receipt_resp.text}")
-        return False
-    
-    receipt = receipt_resp.json()
-    receipt_id = receipt["id"]
-    test_receipts.append(receipt_id)
-    print(f"  ✓ Created advance: {receipt_id} (amount: 300)")
-    
-    # Create sale with legacy attach_receipt_ids (no advance_allocations)
-    sale_resp = requests.post(
-        f"{BASE_URL}/sales",
-        headers=headers(token),
-        json={
-            "customer_id": customer_id,
-            "customer_name": "Legacy Test",
+    # Test normal sale with advance_allocations
+    # Create advance receipt
+    receipt_body = {
+        "customer_id": cust_id,
+        "customer_name": "BalDue Test",
+        "customer_mobile": "9993330001",
+        "amount": 500,
+        "payment_mode": "cash",
+        "source_type": "other"
+    }
+    resp = requests.post(f"{BASE_URL}/receipts", json=receipt_body, headers=h)
+    if resp.status_code != 200:
+        errors.append(f"Failed to create advance receipt for sale test: {resp.status_code}")
+    else:
+        receipt = resp.json()
+        receipt_id = receipt["id"]
+        created_receipts.append(receipt_id)
+        
+        # Create sale with advance_allocations
+        sale_body = {
+            "customer_name": "BalDue Test",
+            "customer_mobile": "9993330001",
             "amount": 1000,
-            "attach_receipt_ids": [receipt_id]
+            "product": "Test Product",
+            "advance_allocations": [
+                {
+                    "receipt_id": receipt_id,
+                    "amount": 500
+                }
+            ]
         }
-    )
-    if sale_resp.status_code != 200:
-        print(f"❌ FAIL: Sale creation failed: {sale_resp.status_code} {sale_resp.text}")
+        resp = requests.post(f"{BASE_URL}/sales", json=sale_body, headers=h)
+        if resp.status_code != 200:
+            errors.append(f"Failed to create sale with advance_allocations: {resp.status_code}")
+        else:
+            sale = resp.json()
+            print(f"✅ Created sale with advance_allocations: {sale['id']}")
+            
+            # Verify linked_receipts shows the advance
+            if "linked_receipts" in sale:
+                advance_receipts = [r for r in sale["linked_receipts"] if r.get("is_advance")]
+                if advance_receipts:
+                    print(f"✅ Sale.linked_receipts contains advance entry")
+                else:
+                    errors.append("Sale.linked_receipts does not contain advance entry")
+            else:
+                errors.append("Sale does not have linked_receipts field")
+    
+    if errors:
+        print(f"❌ REGRESSION TESTS FAILED:")
+        for err in errors:
+            print(f"   - {err}")
         return False
     
-    sale = sale_resp.json()
-    sale_id = sale["id"]
-    test_sales.append(sale_id)
-    print(f"  ✓ Created sale with legacy attach_receipt_ids: {sale_id}")
-    
-    # Verify full 300 is applied
-    sales_resp = requests.get(
-        f"{BASE_URL}/sales",
-        headers=headers(token),
-        params={"scope": "all"}
-    )
-    if sales_resp.status_code != 200:
-        print(f"❌ FAIL: GET /sales failed: {sales_resp.status_code} {sales_resp.text}")
-        return False
-    
-    sales = sales_resp.json()
-    sale_found = None
-    for s in sales:
-        if s["id"] == sale_id:
-            sale_found = s
-            break
-    
-    if not sale_found:
-        print(f"❌ FAIL: Sale {sale_id} not found")
-        return False
-    
-    # Find advance in linked_receipts
-    linked_receipts = sale_found.get("linked_receipts", [])
-    advance_found = None
-    for lr in linked_receipts:
-        if lr.get("is_advance"):
-            advance_found = lr
-            break
-    
-    if not advance_found:
-        print(f"❌ FAIL: No advance entry found in linked_receipts")
-        return False
-    
-    # Verify amount=300 (full amount)
-    if advance_found.get("amount") != 300:
-        print(f"❌ FAIL: Expected advance amount=300 (full), got {advance_found.get('amount')}")
-        return False
-    
-    print(f"  ✓ Full 300 applied via legacy attach_receipt_ids")
-    
-    # Verify receipt is gone from advances
-    adv_resp = requests.get(
-        f"{BASE_URL}/receipts/advances",
-        headers=headers(token),
-        params={"customer_id": customer_id}
-    )
-    if adv_resp.status_code != 200:
-        print(f"❌ FAIL: GET /receipts/advances failed: {adv_resp.status_code} {adv_resp.text}")
-        return False
-    
-    adv_data = adv_resp.json()
-    receipt_found = None
-    for adv in adv_data["advances"]:
-        if adv["id"] == receipt_id:
-            receipt_found = adv
-            break
-    
-    if receipt_found:
-        print(f"❌ FAIL: Receipt still in advances (should be gone, remaining=0)")
-        return False
-    
-    print(f"  ✓ Receipt correctly removed from advances (remaining=0)")
-    print("✅ SCENARIO 9: PASS - Legacy attach_receipt_ids works correctly")
+    print("✅ SCENARIO 9 PASSED: All regression tests passed")
     return True
-
-def test_scenario_10_regression(token: str):
-    """SCENARIO 10: REGRESSION - Check other endpoints still work."""
-    print("\n📋 SCENARIO 10: REGRESSION - Check other endpoints")
-    
-    all_pass = True
-    
-    # Test GET /sales
-    resp = requests.get(f"{BASE_URL}/sales", headers=headers(token), params={"scope": "all"})
-    if resp.status_code != 200:
-        print(f"  ❌ GET /sales failed: {resp.status_code}")
-        all_pass = False
-    else:
-        sales = resp.json()
-        if not isinstance(sales, list):
-            print(f"  ❌ GET /sales returned non-list: {type(sales)}")
-            all_pass = False
-        else:
-            print(f"  ✓ GET /sales: 200 OK (returned {len(sales)} sales)")
-    
-    # Test GET /invoices
-    resp = requests.get(f"{BASE_URL}/invoices", headers=headers(token))
-    if resp.status_code != 200:
-        print(f"  ❌ GET /invoices failed: {resp.status_code}")
-        all_pass = False
-    else:
-        invoices = resp.json()
-        if not isinstance(invoices, list):
-            print(f"  ❌ GET /invoices returned non-list: {type(invoices)}")
-            all_pass = False
-        else:
-            print(f"  ✓ GET /invoices: 200 OK (returned {len(invoices)} invoices)")
-    
-    # Test GET /stats/sales-today
-    resp = requests.get(f"{BASE_URL}/stats/sales-today", headers=headers(token))
-    if resp.status_code != 200:
-        print(f"  ❌ GET /stats/sales-today failed: {resp.status_code}")
-        all_pass = False
-    else:
-        data = resp.json()
-        if "date" not in data or "count" not in data:
-            print(f"  ❌ GET /stats/sales-today missing required fields")
-            all_pass = False
-        else:
-            print(f"  ✓ GET /stats/sales-today: 200 OK (date={data['date']}, count={data['count']})")
-    
-    # Test GET /deliveries
-    resp = requests.get(f"{BASE_URL}/deliveries", headers=headers(token))
-    if resp.status_code != 200:
-        print(f"  ❌ GET /deliveries failed: {resp.status_code}")
-        all_pass = False
-    else:
-        data = resp.json()
-        if "deliveries" not in data:
-            print(f"  ❌ GET /deliveries missing 'deliveries' field")
-            all_pass = False
-        else:
-            print(f"  ✓ GET /deliveries: 200 OK (returned {len(data['deliveries'])} deliveries)")
-    
-    # Create a normal sale without advances
-    sale_resp = requests.post(
-        f"{BASE_URL}/sales",
-        headers=headers(token),
-        json={
-            "customer_name": "Normal Sale",
-            "amount": 500
-        }
-    )
-    if sale_resp.status_code != 200:
-        print(f"  ❌ Normal sale creation failed: {sale_resp.status_code}")
-        all_pass = False
-    else:
-        sale = sale_resp.json()
-        test_sales.append(sale["id"])
-        linked_receipts = sale.get("linked_receipts")
-        if not isinstance(linked_receipts, list):
-            print(f"  ❌ Normal sale linked_receipts is not a list: {type(linked_receipts)}")
-            all_pass = False
-        else:
-            print(f"  ✓ Normal sale created: linked_receipts is array (len={len(linked_receipts)})")
-    
-    if all_pass:
-        print("✅ SCENARIO 10: PASS - All regression checks passed")
-    else:
-        print("❌ SCENARIO 10: FAIL - Some regression checks failed")
-    
-    return all_pass
 
 def main():
     """Run all test scenarios."""
-    print("=" * 80)
-    print("PARTIAL ADVANCE ALLOCATION BACKEND TEST")
-    print("=" * 80)
+    print("\n" + "="*80)
+    print("INVOICE ADVANCE APPLIED + BALANCE DUE BACKEND TEST")
+    print("="*80)
+    
+    token = login()
     
     try:
-        # Login
-        print("\n🔐 Logging in as admin...")
-        token = login(ADMIN_USER, ADMIN_PASS)
-        print(f"✓ Logged in successfully")
+        # Scenario 1: Setup
+        cust_id, receipt_id = test_scenario_1_setup(token)
+        if not cust_id or not receipt_id:
+            print("\n❌ SETUP FAILED - Cannot continue")
+            cleanup(token)
+            sys.exit(1)
         
-        # Track results
-        results = {}
+        # Scenario 2: Partial apply
+        inv_id = test_scenario_2_partial_apply(token, cust_id, receipt_id)
+        if not inv_id:
+            print("\n❌ SCENARIO 2 FAILED")
+            cleanup(token)
+            sys.exit(1)
         
-        # SCENARIO 1: Setup
-        customer_id, receipt_id = test_scenario_1_setup(token)
-        if not customer_id or not receipt_id:
-            print("\n❌ CRITICAL: Setup failed, cannot continue")
-            cleanup_all(token)
-            return
+        # Scenario 3: List reflects fields
+        if not test_scenario_3_list_reflects_fields(token, inv_id):
+            print("\n❌ SCENARIO 3 FAILED")
+            cleanup(token)
+            sys.exit(1)
         
-        # SCENARIO 2: Verify available
-        results["scenario_2"] = test_scenario_2_verify_available(token, customer_id, receipt_id)
+        # Scenario 4: Advance remaining
+        if not test_scenario_4_advance_remaining(token, cust_id, receipt_id):
+            print("\n❌ SCENARIO 4 FAILED")
+            cleanup(token)
+            sys.exit(1)
         
-        # SCENARIO 3: Partial on sale
-        sale_id = test_scenario_3_partial_on_sale(token, customer_id, receipt_id)
-        results["scenario_3"] = sale_id is not None
+        # Scenario 5: Full apply (exact)
+        if not test_scenario_5_full_apply(token, cust_id):
+            print("\n❌ SCENARIO 5 FAILED")
+            cleanup(token)
+            sys.exit(1)
         
-        # SCENARIO 4: Remaining still listed
-        results["scenario_4"] = test_scenario_4_remaining_still_listed(token, customer_id, receipt_id)
+        # Scenario 6: Over-apply cap
+        if not test_scenario_6_over_apply_cap(token, cust_id):
+            print("\n❌ SCENARIO 6 FAILED")
+            cleanup(token)
+            sys.exit(1)
         
-        # SCENARIO 5: Rest on invoice
-        invoice_id = test_scenario_5_rest_on_invoice(token, customer_id, receipt_id)
-        results["scenario_5"] = invoice_id is not None
+        # Scenario 7: No advance (regression)
+        if not test_scenario_7_no_advance(token):
+            print("\n❌ SCENARIO 7 FAILED")
+            cleanup(token)
+            sys.exit(1)
         
-        # SCENARIO 6: Fully consumed
-        results["scenario_6"] = test_scenario_6_fully_consumed(token, customer_id, receipt_id)
+        # Scenario 8: Legacy attach_receipt_ids
+        if not test_scenario_8_legacy_attach_receipt_ids(token):
+            print("\n❌ SCENARIO 8 FAILED")
+            cleanup(token)
+            sys.exit(1)
         
-        # SCENARIO 7: Over-allocation cap
-        results["scenario_7"] = test_scenario_7_over_allocation_cap(token)
+        # Scenario 9: Regression
+        if not test_scenario_9_regression(token, cust_id):
+            print("\n❌ SCENARIO 9 FAILED")
+            cleanup(token)
+            sys.exit(1)
         
-        # SCENARIO 8: Cross-customer safety
-        results["scenario_8"] = test_scenario_8_cross_customer_safety(token)
+        # All tests passed
+        print("\n" + "="*80)
+        print("✅ ALL TESTS PASSED (9/9 scenarios)")
+        print("="*80)
         
-        # SCENARIO 9: Legacy attach_receipt_ids
-        results["scenario_9"] = test_scenario_9_legacy_attach_receipt_ids(token)
-        
-        # SCENARIO 10: Regression
-        results["scenario_10"] = test_scenario_10_regression(token)
-        
-        # Cleanup
-        cleanup_all(token)
-        
-        # Summary
-        print("\n" + "=" * 80)
-        print("TEST SUMMARY")
-        print("=" * 80)
-        
-        passed = sum(1 for v in results.values() if v)
-        total = len(results)
-        
-        for scenario, result in results.items():
-            status = "✅ PASS" if result else "❌ FAIL"
-            print(f"{scenario}: {status}")
-        
-        print(f"\nTotal: {passed}/{total} scenarios passed")
-        
-        if passed == total:
-            print("\n🎉 ALL TESTS PASSED!")
-        else:
-            print(f"\n⚠️  {total - passed} test(s) failed")
-        
-    except Exception as e:
-        print(f"\n❌ CRITICAL ERROR: {e}")
-        import traceback
-        traceback.print_exc()
-        try:
-            cleanup_all(token)
-        except:
-            pass
+    finally:
+        # Always cleanup
+        cleanup(token)
 
 if __name__ == "__main__":
     main()
