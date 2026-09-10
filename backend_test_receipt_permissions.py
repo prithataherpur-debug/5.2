@@ -9,7 +9,7 @@ import json
 from typing import Dict, Any, Optional
 
 # Public URL from review request
-BASE_URL = "https://c5016b85-dc98-485e-b5dc-5005ae41eac1.preview.emergentagent.com/api"
+BASE_URL = "https://open-hub-15.preview.emergentagent.com/api"
 
 # Test credentials
 ADMIN_CREDS = {"username": "admin", "password": "Admin@2026"}

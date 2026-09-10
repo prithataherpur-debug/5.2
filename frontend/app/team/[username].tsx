@@ -10,6 +10,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { theme } from "@/src/lib/theme";
 import { api, User, Sale, STATUS_COLOR, STATUS_LABEL } from "@/src/lib/api";
 import { useAuth } from "@/src/lib/auth";
+import { fmtDMYTime } from "@/src/lib/date";
 
 type CallLog = {
   id: string;
@@ -24,10 +25,7 @@ type CallLog = {
 
 type TabKey = "calls" | "sales";
 
-const fmtDate = (iso: string) =>
-  new Date(iso).toLocaleString([], {
-    month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
-  });
+const fmtDate = (iso: string) => fmtDMYTime(iso);
 const fmtAmt = (n: number) => "₹" + Math.round(n).toLocaleString("en-IN");
 
 export default function TeamMemberScreen() {

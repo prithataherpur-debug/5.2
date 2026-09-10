@@ -11,6 +11,7 @@ import { useAuth } from "@/src/lib/auth";
 import SelfieCapture from "@/src/components/SelfieCapture";
 import { uploadSelfie, mediaUrl, fetchMediaToken } from "@/src/lib/media";
 import PunchSaleModal from "@/src/components/PunchSaleModal";
+import { fmtDMY } from "@/src/lib/date";
 
 function fmtDuration(mins: number): string {
   if (mins <= 0) return "0m";
@@ -195,7 +196,7 @@ export default function Progress() {
           <View style={styles.attendanceCard}>
             <View style={styles.attHeader}>
               <Ionicons name="finger-print" size={18} color={theme.color.brand} />
-              <Text style={styles.attTitle}>Attendance · {stats?.date}</Text>
+              <Text style={styles.attTitle}>Attendance · {fmtDMY(stats?.date)}</Text>
             </View>
             <View style={styles.attGrid}>
               <View style={styles.attCol}>

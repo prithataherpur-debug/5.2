@@ -13,6 +13,7 @@ import { api, MoneyReceipt, API } from "@/src/lib/api";
 import { CustomerPicker, PickerCustomer } from "@/src/components/CustomerPicker";
 import { useAuth } from "@/src/lib/auth";
 import DateNavigator, { todayKey } from "@/src/components/DateNavigator";
+import { fmtDMY, toApiDate } from "@/src/lib/date";
 
 const fmt = (n: number) => "₹" + (Math.round(n * 100) / 100).toLocaleString("en-IN");
 const plusDays = (n: number) => {
@@ -157,7 +158,7 @@ export default function ReceiptsScreen() {
                   <Text style={styles.cardNo}>{item.receipt_no}</Text>
                   <Text style={styles.cardName}>{item.customer_name}</Text>
                   <Text style={styles.cardMeta}>
-                    {item.date_key} · {item.display_name || item.user} · {item.payment_mode.toUpperCase()}
+                    {fmtDMY(item.date_key)} · {item.display_name || item.user} · {item.payment_mode.toUpperCase()}
                     {item.source_label ? `  ·  ${item.source_label}` : ""}
                   </Text>
                   {item.status === "pending" ? (
@@ -285,7 +286,7 @@ function ReceiptEditor({
       setSourceId(editing.source_id || undefined);
       setRefNo(editing.reference_no || "");
       setNarration(editing.narration || ""); setNotes(editing.notes || ""); setErr("");
-      setDateKey(editing.date_key || "");
+      setDateKey(editing.date_key ? fmtDMY(editing.date_key) : "");
       setSrcInfo(null);
       return;
     }
@@ -359,6 +360,10 @@ function ReceiptEditor({
     } else {
       if (Number.isNaN(n) || n <= 0) { setErr("Enter a valid amount."); return; }
     }
+    const rcptDate = toApiDate(dateKey);
+    if (rcptDate === null) { setErr("Receipt date must be DD-MM-YYYY (e.g. 05-09-2026)."); return; }
+    const dueDate = toApiDate(deliveryDue);
+    if (!editing && needsDelivery && dueDate === null) { setErr("Delivery due date must be DD-MM-YYYY (e.g. 12-09-2026)."); return; }
     setBusy(true);
     setErr("");
     try {
@@ -376,9 +381,9 @@ function ReceiptEditor({
         reference_no: refNo.trim() || undefined,
         narration: narration.trim(),
         notes: notes.trim(),
-        date_key: dateKey.trim() || undefined,
+        date_key: rcptDate || undefined,
         needs_delivery: !editing && needsDelivery ? true : undefined,
-        delivery_due_date: !editing && needsDelivery && deliveryDue.trim() ? deliveryDue.trim() : undefined,
+        delivery_due_date: !editing && needsDelivery && dueDate ? dueDate : undefined,
       };
       if (editing) {
         const r = await api.replaceReceipt(editing.id, body);
@@ -520,7 +525,7 @@ function ReceiptEditor({
                   onPress={() => {
                     const next = !needsDelivery;
                     setNeedsDelivery(next);
-                    if (next && !deliveryDue) setDeliveryDue(plusDays(2));
+                    if (next && !deliveryDue) setDeliveryDue(fmtDMY(plusDays(2)));
                   }}
                   style={styles.delivToggleRow}
                   testID="rcpt-delivery-toggle"
@@ -537,11 +542,11 @@ function ReceiptEditor({
 
                 {needsDelivery ? (
                   <View style={{ marginTop: theme.space.sm }}>
-                    <Text style={styles.label}>Delivery due date (YYYY-MM-DD)</Text>
+                    <Text style={styles.label}>Delivery due date (DD-MM-YYYY)</Text>
                     <TextInput
                       value={deliveryDue}
                       onChangeText={setDeliveryDue}
-                      placeholder="2025-08-20"
+                      placeholder="20-08-2025"
                       placeholderTextColor={theme.color.muted}
                       autoCapitalize="none"
                       style={styles.input}
@@ -554,7 +559,7 @@ function ReceiptEditor({
                         { label: "+3 days", d: 3 },
                         { label: "+7 days", d: 7 },
                       ].map((q) => {
-                        const val = plusDays(q.d);
+                        const val = fmtDMY(plusDays(q.d));
                         const active = deliveryDue === val;
                         return (
                           <Pressable
@@ -580,7 +585,8 @@ function ReceiptEditor({
             <TextInput value={notes} onChangeText={setNotes} multiline placeholder="Anything for us to remember" placeholderTextColor={theme.color.muted} style={[styles.input, { minHeight: 60, textAlignVertical: "top" }]} testID="rcpt-notes" />
 
             <Text style={styles.label}>Receipt date (optional — back-date)</Text>
-            <TextInput value={dateKey} onChangeText={setDateKey} placeholder="YYYY-MM-DD · empty = today" placeholderTextColor={theme.color.muted} style={styles.input} testID="rcpt-date" autoCapitalize="none" />
+            <TextInput value={dateKey} onChangeText={setDateKey} placeholder="DD-MM-YYYY · empty = today" placeholderTextColor={theme.color.muted} style={styles.input} testID="rcpt-date" autoCapitalize="none" />
+            <Text style={styles.hint}>Only back-dated entries go for admin approval</Text>
 
             {err ? <Text style={styles.err}>{err}</Text> : null}
 
@@ -660,6 +666,7 @@ const styles = StyleSheet.create({
   segText: { fontSize: 12, fontWeight: "700", color: theme.color.muted },
   segTextActive: { color: "#fff" },
   err: { color: theme.color.error, marginTop: theme.space.md, fontSize: 13 },
+  hint: { fontSize: 12, color: theme.color.muted, marginTop: 4 },
   saveBtn: { marginTop: theme.space.xl, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, backgroundColor: theme.color.brand, height: 52, borderRadius: theme.radius.md },
   saveBtnText: { color: "#fff", fontWeight: "800", fontSize: 16 },
   cancelBtn: { marginTop: theme.space.md, height: 44, alignItems: "center", justifyContent: "center" },

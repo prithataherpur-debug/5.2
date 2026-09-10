@@ -2594,6 +2594,12 @@ def _backdate_key(v: Optional[str]) -> str:
     return s
 
 
+def _entry_status(user: dict, date_key: str) -> str:
+    """Same-day entries are auto-approved for EVERYONE (admin and employee).
+    Only BACK-DATED employee entries go to the admin approval queue."""
+    return "approved" if (user.get("role") == "admin" or date_key == today_key()) else "pending"
+
+
 def _date_range(from_date: str, to_date: str) -> List[str]:
     a = datetime.strptime(from_date, "%Y-%m-%d").date()
     b = datetime.strptime(to_date, "%Y-%m-%d").date()
@@ -3150,6 +3156,7 @@ async def create_sale(body: SaleBody, u=Depends(current_user)):
         purchase_val = float(body.purchase_amount)
 
     sale_id = str(uuid.uuid4())
+    sale_date = _backdate_key(body.date_key)
     doc = {
         "id": sale_id,
         "user": u["username"],
@@ -3164,9 +3171,9 @@ async def create_sale(body: SaleBody, u=Depends(current_user)):
         "currency": body.currency or "INR",
         "product": body.product or "",
         "notes": body.notes or "",
-        "date_key": _backdate_key(body.date_key),
+        "date_key": sale_date,
         "timestamp": now_iso(),
-        "status": "approved" if u["role"] == "admin" else "pending",
+        "status": _entry_status(u, sale_date),
     }
     await db.sales.insert_one(doc)
     doc.pop("_id", None)
@@ -3348,7 +3355,8 @@ async def patch_sale(sid: str, body: SalePatchBody, u=Depends(current_user)):
     upd["updated_at"] = now_iso()
     upd["updated_by"] = u["username"]
     if not is_admin:
-        upd["status"] = "pending"  # employee edits re-flag the entry for admin review
+        eff_date = upd.get("date_key") or existing.get("date_key") or today_key()
+        upd["status"] = _entry_status(u, eff_date)  # only back-dated entries need admin review
     doc = await db.sales.find_one_and_update(
         {"id": sid}, {"$set": upd}, return_document=True, projection={"_id": 0},
     )
@@ -3685,7 +3693,7 @@ async def create_invoice(body: InvoiceCreateBody, u=Depends(current_user)):
         "created_at": now,
         "advance_applied": advance_applied,
         "balance_due": balance_due,
-        "status": "approved" if u["role"] == "admin" else "pending",
+        "status": _entry_status(u, date_key),
     }
     await db.invoices.insert_one(doc)
 
@@ -3853,7 +3861,7 @@ async def replace_invoice(iid: str, body: InvoiceUpdateBody, u=Depends(current_u
         "cash_amount": cash_amt, "online_amount": online_amt, "payment_mode": pay_mode,
         "notes": notes, "pdf_path": pdf_path, "date_key": date_key,
         "updated_at": now_iso(), "updated_by": u["username"],
-        "status": "approved" if u["role"] == "admin" else "pending",  # employee edits re-flag for review
+        "status": _entry_status(u, date_key),  # only back-dated entries need admin review
     }
     await db.invoices.update_one({"id": iid}, {"$set": upd})
     # Keep linked receipts' reference/label in sync (invoice number unchanged, customer may have changed)
@@ -4091,7 +4099,7 @@ async def create_receipt(body: ReceiptCreateBody, u=Depends(current_user)):
         "delivery_due_date": delivery_due_date,
         "delivered_at": None,
         "delivery_note": "",
-        "status": "approved" if u["role"] == "admin" else "pending",
+        "status": _entry_status(u, date_key),
     }
     await db.receipts.insert_one(doc)
     doc["display_name"] = display
@@ -4381,7 +4389,7 @@ async def update_receipt(rid: str, body: ReceiptPatchBody, u=Depends(current_use
     if not upd:
         raise HTTPException(400, "No changes")
     if u["role"] != "admin":
-        upd["status"] = "pending"  # employee edits re-flag the entry for admin review
+        upd["status"] = _entry_status(u, doc.get("date_key") or today_key())  # only back-dated entries need admin review
     # Recompute source_label if source_type/source_id changed
     if "source_type" in upd or "source_id" in upd:
         new_st = upd.get("source_type", doc.get("source_type", "other"))
@@ -4492,7 +4500,7 @@ async def replace_receipt(rid: str, body: ReceiptUpdateBody, u=Depends(current_u
         "narration": (body.narration or "").strip(), "notes": (body.notes or "").strip(),
         "pdf_path": pdf_path, "date_key": date_key,
         "updated_at": now_iso(), "updated_by": u["username"],
-        "status": "approved" if u["role"] == "admin" else "pending",  # employee edits re-flag for review
+        "status": _entry_status(u, date_key),  # only back-dated entries need admin review
     }
     await db.receipts.update_one({"id": rid}, {"$set": upd})
     fresh = await db.receipts.find_one({"id": rid}, {"_id": 0})

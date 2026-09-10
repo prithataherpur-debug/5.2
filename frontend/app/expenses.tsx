@@ -12,6 +12,7 @@ import { API } from "@/src/lib/api";
 import { storage } from "@/src/utils/storage";
 import { TOKEN_KEY } from "@/src/lib/api";
 import { useAuth } from "@/src/lib/auth";
+import { fmtDMY } from "@/src/lib/date";
 
 const CATEGORIES = ["marketing", "office", "salaries", "utilities", "travel", "misc"];
 
@@ -130,7 +131,7 @@ export default function Expenses() {
                 <Text style={styles.cardCat}>{item.category.toUpperCase()}</Text>
                 <Text style={styles.cardAmt}>{fmtAmt(item.amount)}</Text>
                 {item.description ? <Text style={styles.cardDesc} numberOfLines={2}>{item.description}</Text> : null}
-                <Text style={styles.cardDate}>{item.date_key}</Text>
+                <Text style={styles.cardDate}>{fmtDMY(item.date_key)}</Text>
               </View>
               <Pressable onPress={() => del(item.id)} style={styles.delBtn} testID={`del-expense-${item.id}`}>
                 <Ionicons name="trash-outline" size={18} color={theme.color.error} />

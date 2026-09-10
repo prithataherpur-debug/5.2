@@ -11,6 +11,7 @@ import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { theme } from "@/src/lib/theme";
 import { api, CollectionEntry, LinkedReceipt, User, DENOMS } from "@/src/lib/api";
 import { useAuth } from "@/src/lib/auth";
+import { fmtDMY, toApiDate } from "@/src/lib/date";
 
 const fmtAmt = (n: number) => "₹" + Math.round(n).toLocaleString("en-IN");
 const todayKey = () => new Date().toISOString().slice(0, 10);
@@ -192,7 +193,7 @@ export default function CollectionsScreen() {
             >
               <View style={styles.cardTop}>
                 <View>
-                  <Text style={styles.cardDate}>{item.date_key}</Text>
+                  <Text style={styles.cardDate}>{fmtDMY(item.date_key)}</Text>
                   <Text style={styles.cardMeta}>
                     {item.display_name || item.user}
                     {item.notes ? <Text style={styles.cardMetaThin}>  ·  {item.notes}</Text> : null}
@@ -325,12 +326,12 @@ function EntryEditor({
   useEffect(() => {
     if (!visible) return;
     if (isNew) {
-      setDateKey(todayKey());
+      setDateKey(fmtDMY(todayKey()));
       setCash("");
       setOnline("");
       setNotes("");
     } else if (editing) {
-      setDateKey(editing.date_key);
+      setDateKey(fmtDMY(editing.date_key));
       setCash(String(editing.cash_total || ""));
       setOnline(String(editing.online_total || ""));
       setNotes(editing.notes || "");
@@ -347,11 +348,13 @@ function EntryEditor({
       setErr("Enter at least a cash or online amount.");
       return;
     }
+    const colDate = toApiDate(dateKey);
+    if (!colDate) { setErr("Date must be DD-MM-YYYY (e.g. 05-09-2026)."); return; }
     setBusy(true);
     setErr("");
     try {
       const payload = {
-        date_key: dateKey || undefined,
+        date_key: colDate || undefined,
         cash_total: cashN,
         online_total: onlineN,
         notes,
@@ -390,7 +393,7 @@ function EntryEditor({
             <TextInput
               value={dateKey}
               onChangeText={setDateKey}
-              placeholder="YYYY-MM-DD"
+              placeholder="DD-MM-YYYY"
               placeholderTextColor={theme.color.muted}
               style={styles.input}
               testID="col-date"

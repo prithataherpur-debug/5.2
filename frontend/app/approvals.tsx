@@ -8,6 +8,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { theme } from "@/src/lib/theme";
 import { api, ApprovalItem } from "@/src/lib/api";
 import { useAuth } from "@/src/lib/auth";
+import { fmtDMY } from "@/src/lib/date";
 
 const KIND_META: Record<string, { label: string; icon: keyof typeof Ionicons.glyphMap; color: string }> = {
   sale: { label: "Sale", icon: "cash-outline", color: "#0E9F6E" },
@@ -89,7 +90,7 @@ export default function ApprovalsScreen() {
         </View>
         <Text style={styles.customer} numberOfLines={1}>{item.customer_name || "Customer"}</Text>
         <Text style={styles.meta}>
-          by {item.display_name || item.user} · {item.date_key} · {item.payment_mode.toUpperCase()}
+          by {item.display_name || item.user} · {fmtDMY(item.date_key)} · {item.payment_mode.toUpperCase()}
         </Text>
         {item.notes ? <Text style={styles.notes} numberOfLines={2}>{item.notes}</Text> : null}
         <View style={styles.actions}>

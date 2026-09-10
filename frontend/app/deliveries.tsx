@@ -18,14 +18,10 @@ import { useRouter, useFocusEffect } from "expo-router";
 
 import { theme } from "@/src/lib/theme";
 import { api, Delivery } from "@/src/lib/api";
+import { fmtDMY } from "@/src/lib/date";
 
 const fmt = (n: number) => "₹" + (Math.round(n * 100) / 100).toLocaleString("en-IN");
-const prettyDate = (iso?: string | null) => {
-  if (!iso) return "—";
-  const d = new Date(iso.length === 10 ? iso + "T00:00:00" : iso);
-  if (isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
-};
+const prettyDate = (iso?: string | null) => fmtDMY(iso);
 const daysFromToday = (iso?: string | null) => {
   if (!iso) return null;
   const d = new Date((iso.length === 10 ? iso + "T00:00:00" : iso));

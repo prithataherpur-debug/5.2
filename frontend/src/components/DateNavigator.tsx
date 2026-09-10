@@ -1,6 +1,7 @@
 import { View, Text, StyleSheet, Pressable } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { theme } from "@/src/lib/theme";
+import { fmtDMY } from "@/src/lib/date";
 
 export const todayKey = () => new Date().toISOString().slice(0, 10);
 export const shiftDate = (d: string, days: number) => {
@@ -9,13 +10,7 @@ export const shiftDate = (d: string, days: number) => {
   return dt.toISOString().slice(0, 10);
 };
 
-const prettyDate = (d: string) => {
-  try {
-    return new Date(d + "T00:00:00Z").toLocaleDateString("en-IN", {
-      weekday: "short", day: "2-digit", month: "short", year: "numeric",
-    });
-  } catch { return d; }
-};
+const prettyDate = (d: string) => fmtDMY(d);
 
 /** Compact prev / today / next date navigator. Cannot go past today. */
 export default function DateNavigator({

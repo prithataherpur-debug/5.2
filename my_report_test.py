@@ -9,7 +9,7 @@ import json
 from typing import Optional, Dict
 
 # Configuration
-BASE_URL = "https://credit-persistence.preview.emergentagent.com"
+BASE_URL = "https://open-hub-15.preview.emergentagent.com"
 API_BASE = f"{BASE_URL}/api"
 
 # Test credentials

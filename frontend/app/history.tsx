@@ -6,6 +6,7 @@ import { Ionicons } from "@expo/vector-icons";
 
 import { theme } from "@/src/lib/theme";
 import { api, STATUS_COLOR, STATUS_LABEL } from "@/src/lib/api";
+import { fmtDMY } from "@/src/lib/date";
 
 type Row = { date: string; total: number; breakdown: Record<string, number> };
 
@@ -52,7 +53,7 @@ export default function History() {
           renderItem={({ item }) => (
             <View style={styles.card}>
               <View style={styles.cardTop}>
-                <Text style={styles.date}>{item.date}</Text>
+                <Text style={styles.date}>{fmtDMY(item.date)}</Text>
                 <View style={styles.totalPill}>
                   <Ionicons name="call" size={12} color={theme.color.brand} />
                   <Text style={styles.totalText}>{item.total} calls</Text>

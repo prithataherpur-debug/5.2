@@ -13,6 +13,7 @@ import { api, Invoice, API, MoneyReceipt } from "@/src/lib/api";
 import { CustomerPicker, PickerCustomer } from "@/src/components/CustomerPicker";
 import { useAuth } from "@/src/lib/auth";
 import DateNavigator, { todayKey } from "@/src/components/DateNavigator";
+import { fmtDMY, toApiDate } from "@/src/lib/date";
 
 const fmt = (n: number) => "₹" + (Math.round(n * 100) / 100).toLocaleString("en-IN");
 
@@ -140,7 +141,7 @@ export default function InvoicesScreen() {
                   <Text style={styles.cardNo}>{item.invoice_no}</Text>
                   <Text style={styles.cardName}>{item.customer_name}</Text>
                   <Text style={styles.cardMeta}>
-                    {item.date_key} · {item.display_name || item.user} · {item.items.length} item{item.items.length > 1 ? "s" : ""}
+                    {fmtDMY(item.date_key)} · {item.display_name || item.user} · {item.items.length} item{item.items.length > 1 ? "s" : ""}
                   </Text>
                   {item.status === "pending" ? (
                     <View style={styles.pendingPill} testID={`inv-pending-${item.id}`}>
@@ -298,7 +299,7 @@ function InvoiceEditor({
         mobile: editing.customer_mobile || "", address: editing.customer_address || "",
       });
       setNotes(editing.notes || "");
-      setDateKey(editing.date_key || "");
+      setDateKey(editing.date_key ? fmtDMY(editing.date_key) : "");
       setItems((editing.items || []).map((it, i) => ({ id: `${i}-${Date.now()}`, name: it.name, qty: String(it.qty), rate: String(it.unit_price), cost: it.unit_cost ? String(it.unit_cost) : "" })));
       setPayMode((editing.payment_mode as any) || "cash");
       setCashPart(editing.payment_mode === "mixed" ? String(editing.cash_amount || "") : "");
@@ -442,6 +443,8 @@ function InvoiceEditor({
         return;
       }
     } else { cashAmt = tot; onlineAmt = 0; }
+    const invDate = toApiDate(dateKey);
+    if (invDate === null) { setErr("Date must be DD-MM-YYYY (e.g. 05-09-2026)."); return; }
     setBusy(true);
     setErr("");
     try {
@@ -454,7 +457,7 @@ function InvoiceEditor({
         items: cleanItems,
         cash_amount: cashAmt,
         online_amount: onlineAmt,
-        date_key: dateKey.trim() || undefined,
+        date_key: invDate || undefined,
       };
       if (editing) {
         const inv = await api.replaceInvoice(editing.id, base);
@@ -527,7 +530,7 @@ function InvoiceEditor({
                         />
                       </Pressable>
                       <View style={{ flex: 1, marginLeft: 8 }}>
-                        <Text style={styles.advItemNo}>{r.receipt_no} · {r.date_key}</Text>
+                        <Text style={styles.advItemNo}>{r.receipt_no} · {fmtDMY(r.date_key)}</Text>
                         <Text style={styles.advItemMeta}>
                           {r.payment_mode.toUpperCase()} · Available {fmt(rem)}
                           {(r.allocated ?? 0) > 0 ? ` · used ${fmt(r.allocated ?? 0)}` : ""}
@@ -691,7 +694,8 @@ function InvoiceEditor({
             <TextInput value={notes} onChangeText={setNotes} multiline placeholder="Additional details for the customer" placeholderTextColor={theme.color.muted} style={[styles.input, { minHeight: 60, textAlignVertical: "top" }]} testID="inv-notes" />
 
             <Text style={styles.label}>Invoice date (optional — back-date)</Text>
-            <TextInput value={dateKey} onChangeText={setDateKey} placeholder="YYYY-MM-DD · empty = today" placeholderTextColor={theme.color.muted} style={styles.input} testID="inv-date" autoCapitalize="none" />
+            <TextInput value={dateKey} onChangeText={setDateKey} placeholder="DD-MM-YYYY · empty = today" placeholderTextColor={theme.color.muted} style={styles.input} testID="inv-date" autoCapitalize="none" />
+            <Text style={styles.hint}>Only back-dated entries go for admin approval</Text>
 
             {err ? <Text style={styles.err}>{err}</Text> : null}
 
@@ -850,6 +854,7 @@ const styles = StyleSheet.create({
   profitCostVal: { fontSize: 17, fontWeight: "800", color: theme.color.onSurface, marginTop: 2 },
   profitVal: { fontSize: 17, fontWeight: "900", color: theme.color.success, marginTop: 2 },
   err: { color: theme.color.error, marginTop: theme.space.md, fontSize: 13 },
+  hint: { fontSize: 12, color: theme.color.muted, marginTop: 4 },
   saveBtn: { marginTop: theme.space.xl, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, backgroundColor: theme.color.brand, height: 52, borderRadius: theme.radius.md },
   saveBtnText: { color: "#fff", fontWeight: "800", fontSize: 16 },
   cancelBtn: { marginTop: theme.space.md, height: 44, alignItems: "center", justifyContent: "center" },

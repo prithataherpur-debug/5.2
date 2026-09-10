@@ -12,6 +12,7 @@ import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { theme } from "@/src/lib/theme";
 import { api, CollectionEntry, MoneyReceipt, Invoice, Sale, LinkedReceipt, DENOMS } from "@/src/lib/api";
 import { useAuth } from "@/src/lib/auth";
+import { fmtDMY } from "@/src/lib/date";
 
 const fmt = (n: number) => "₹" + Math.round(n).toLocaleString("en-IN");
 const todayKey = () => new Date().toISOString().slice(0, 10);
@@ -79,9 +80,9 @@ export default function DaybookScreen() {
   const chooseExport = () => setExportOpen(true);
   const monthStart = date.slice(0, 8) + "01";
   const exportOptions: { key: string; label: string; sub: string; run: () => void }[] = [
-    { key: "day", label: "This day", sub: date, run: () => downloadExcel(date) },
-    { key: "week", label: "Last 7 days", sub: `${shiftDate(date, -6)} → ${date}`, run: () => downloadExcel(shiftDate(date, -6), date) },
-    { key: "month", label: "This month", sub: `${monthStart} → ${date}`, run: () => downloadExcel(monthStart, date) },
+    { key: "day", label: "This day", sub: fmtDMY(date), run: () => downloadExcel(date) },
+    { key: "week", label: "Last 7 days", sub: `${fmtDMY(shiftDate(date, -6))} → ${fmtDMY(date)}`, run: () => downloadExcel(shiftDate(date, -6), date) },
+    { key: "month", label: "This month", sub: `${fmtDMY(monthStart)} → ${fmtDMY(date)}`, run: () => downloadExcel(monthStart, date) },
   ];
 
   const [forbidden, setForbidden] = useState(false);
@@ -184,7 +185,7 @@ export default function DaybookScreen() {
           style={styles.dateCenter}
           testID="date-today"
         >
-          <Text style={styles.dateText}>{date}</Text>
+          <Text style={styles.dateText}>{fmtDMY(date)}</Text>
           {date !== todayKey() ? <Text style={styles.dateSub}>Tap for today</Text> : <Text style={styles.dateSub}>Today</Text>}
         </Pressable>
         <Pressable
@@ -279,7 +280,7 @@ export default function DaybookScreen() {
             !data.sales || data.sales.entries.length === 0 ? (
               <View style={styles.emptyBlock}>
                 <Ionicons name="cart-outline" size={20} color={theme.color.borderStrong} />
-                <Text style={styles.emptyText}>No sales punched on {date}</Text>
+                <Text style={styles.emptyText}>No sales punched on {fmtDMY(date)}</Text>
                 <Pressable onPress={() => router.push("/sales")} style={{ marginTop: 6 }}>
                   <Text style={styles.linkText}>Open Sales →</Text>
                 </Pressable>
@@ -306,7 +307,7 @@ export default function DaybookScreen() {
             !data.invoices || data.invoices.entries.length === 0 ? (
               <View style={styles.emptyBlock}>
                 <Ionicons name="document-text-outline" size={20} color={theme.color.borderStrong} />
-                <Text style={styles.emptyText}>No invoices generated on {date}</Text>
+                <Text style={styles.emptyText}>No invoices generated on {fmtDMY(date)}</Text>
                 <Pressable onPress={() => router.push("/invoices")} style={{ marginTop: 6 }}>
                   <Text style={styles.linkText}>Open Invoices →</Text>
                 </Pressable>
@@ -333,7 +334,7 @@ export default function DaybookScreen() {
             data.due_collection.entries.length === 0 ? (
               <View style={styles.emptyBlock}>
                 <Ionicons name="wallet-outline" size={20} color={theme.color.borderStrong} />
-                <Text style={styles.emptyText}>No collection logged for {date}</Text>
+                <Text style={styles.emptyText}>No collection logged for {fmtDMY(date)}</Text>
                 <Pressable onPress={() => router.push("/collections")} style={{ marginTop: 6 }}>
                   <Text style={styles.linkText}>Open Due Collection →</Text>
                 </Pressable>
@@ -368,7 +369,7 @@ export default function DaybookScreen() {
             !data.receipts || data.receipts.entries.length === 0 ? (
               <View style={styles.emptyBlock}>
                 <Ionicons name="receipt-outline" size={20} color={theme.color.borderStrong} />
-                <Text style={styles.emptyText}>No money receipts issued on {date}</Text>
+                <Text style={styles.emptyText}>No money receipts issued on {fmtDMY(date)}</Text>
                 <Pressable onPress={() => router.push("/receipts")} style={{ marginTop: 6 }}>
                   <Text style={styles.linkText}>Open Money Receipts →</Text>
                 </Pressable>

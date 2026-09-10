@@ -13,6 +13,7 @@ import { useAuth } from "@/src/lib/auth";
 import { storage } from "@/src/utils/storage";
 import PunchSaleModal from "@/src/components/PunchSaleModal";
 import DateNavigator, { todayKey } from "@/src/components/DateNavigator";
+import { fmtDMY, fmtDMYTime, toApiDate } from "@/src/lib/date";
 
 export default function SalesScreen() {
   const insets = useSafeAreaInsets();
@@ -72,7 +73,7 @@ export default function SalesScreen() {
       setOwnMode((ownEdit.payment_mode as any) || "cash");
       setOwnCash(String(ownEdit.cash_amount ?? ""));
       setOwnOnline(String(ownEdit.online_amount ?? ""));
-      setOwnDate(ownEdit.date_key || "");
+      setOwnDate(ownEdit.date_key ? fmtDMY(ownEdit.date_key) : "");
       setOwnErr("");
     }
   }, [ownEdit]);
@@ -93,9 +94,10 @@ export default function SalesScreen() {
       if (Math.abs(c + o - n) > 0.01) { setOwnErr(`Cash ₹${c} + Online ₹${o} must equal amount ₹${n}`); return; }
       patch.cash_amount = c; patch.online_amount = o;
     }
-    if (ownDate.trim() && ownDate.trim() !== ownEdit.date_key) {
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(ownDate.trim())) { setOwnErr("Date must be YYYY-MM-DD"); return; }
-      patch.date_key = ownDate.trim();
+    if (ownDate.trim() && ownDate.trim() !== fmtDMY(ownEdit.date_key)) {
+      const apiDate = toApiDate(ownDate);
+      if (!apiDate) { setOwnErr("Date must be DD-MM-YYYY (e.g. 05-09-2026)"); return; }
+      patch.date_key = apiDate;
     }
     if (isAdmin && ownPurchase.trim() !== "") {
       const p = parseFloat(ownPurchase);
@@ -175,8 +177,7 @@ export default function SalesScreen() {
     finally { setSaving(false); }
   };
 
-  const fmtDate = (iso: string) =>
-    new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  const fmtDate = (iso: string) => fmtDMYTime(iso);
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]} testID="sales-screen">
@@ -466,8 +467,8 @@ export default function SalesScreen() {
                   <TextInput value={ownOnline} onChangeText={setOwnOnline} keyboardType="decimal-pad" placeholder="Online ₹" placeholderTextColor={theme.color.muted} style={[styles.input, { flex: 1 }]} testID="own-online" />
                 </View>
               ) : null}
-              <Text style={styles.fieldLabel}>Sale date (YYYY-MM-DD) — past dates allowed</Text>
-              <TextInput value={ownDate} onChangeText={setOwnDate} placeholder="2026-01-31" placeholderTextColor={theme.color.muted} style={styles.input} testID="own-date" />
+              <Text style={styles.fieldLabel}>Sale date (DD-MM-YYYY) — past dates allowed</Text>
+              <TextInput value={ownDate} onChangeText={setOwnDate} placeholder="31-01-2026" placeholderTextColor={theme.color.muted} style={styles.input} testID="own-date" />
               <Text style={styles.fieldLabel}>Product / service</Text>
               <TextInput
                 value={ownProduct}

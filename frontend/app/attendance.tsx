@@ -8,6 +8,7 @@ import { theme } from "@/src/lib/theme";
 import { api, AttendanceRec } from "@/src/lib/api";
 import { useAuth } from "@/src/lib/auth";
 import { mediaUrl, fetchMediaToken } from "@/src/lib/media";
+import { fmtDMY } from "@/src/lib/date";
 
 function SelfieThumb({ path }: { path?: string | null }) {
   const [token, setToken] = useState<string | null>(null);
@@ -86,7 +87,7 @@ export default function AttendanceHistory() {
           renderItem={({ item }) => (
             <View style={styles.card}>
               <View style={styles.rowTop}>
-                <Text style={styles.date}>{item.date_key}</Text>
+                <Text style={styles.date}>{fmtDMY(item.date_key)}</Text>
                 {user?.role === "admin" ? <Text style={styles.who}>{item.display_name || item.user}</Text> : null}
               </View>
               <View style={styles.rowGrid}>

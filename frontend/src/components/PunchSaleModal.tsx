@@ -7,6 +7,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
 import { theme } from "@/src/lib/theme";
 import { api, Customer, MoneyReceipt } from "@/src/lib/api";
+import { fmtDMY, toApiDate } from "@/src/lib/date";
 
 const fmtRcp = (n: number) => "₹" + Math.round(n).toLocaleString("en-IN");
 
@@ -171,6 +172,11 @@ export default function PunchSaleModal({ visible, onClose, onSaved, presetCustom
         return;
       }
     }
+    const saleDate = toApiDate(dateKey);
+    if (saleDate === null) {
+      setErr("Date must be DD-MM-YYYY (e.g. 05-09-2026).");
+      return;
+    }
     setBusy(true);
     setDupCustomer(null);
     // Optional product cost (any employee can enter it)
@@ -227,7 +233,7 @@ export default function PunchSaleModal({ visible, onClose, onSaved, presetCustom
         notes: notes.trim(),
         purchase_amount: purchaseVal,
         advance_allocations: allocations,
-        date_key: dateKey.trim() || undefined,
+        date_key: saleDate || undefined,
       });
       onSaved();
     } catch (e: any) {
@@ -395,7 +401,7 @@ export default function PunchSaleModal({ visible, onClose, onSaved, presetCustom
                             <Ionicons name={on ? "checkbox" : "square-outline"} size={18} color={on ? theme.color.brand : theme.color.muted} />
                           </Pressable>
                           <View style={{ flex: 1, marginLeft: 8 }}>
-                            <Text style={styles.advItemNo}>{r.receipt_no} · {r.date_key}</Text>
+                            <Text style={styles.advItemNo}>{r.receipt_no} · {fmtDMY(r.date_key)}</Text>
                             <Text style={styles.advItemMeta}>
                               {r.payment_mode.toUpperCase()} · Available {fmtRcp(rem)}
                               {(r.allocated ?? 0) > 0 ? ` · used ${fmtRcp(r.allocated ?? 0)}` : ""}
@@ -468,12 +474,13 @@ export default function PunchSaleModal({ visible, onClose, onSaved, presetCustom
             <TextInput
               value={dateKey}
               onChangeText={setDateKey}
-              placeholder="YYYY-MM-DD · empty = today"
+              placeholder="DD-MM-YYYY · empty = today"
               placeholderTextColor={theme.color.muted}
               style={styles.input}
               testID="sale-date"
               autoCapitalize="none"
             />
+            <Text style={styles.hint}>Only back-dated entries go for admin approval</Text>
 
             <Text style={styles.label}>Product / service</Text>
             <TextInput

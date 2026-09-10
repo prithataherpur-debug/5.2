@@ -10,16 +10,10 @@ import { theme } from "@/src/lib/theme";
 import { api } from "@/src/lib/api";
 import { useAuth } from "@/src/lib/auth";
 import CustomerEditModal from "@/src/components/CustomerEditModal";
+import { fmtDMYTime } from "@/src/lib/date";
 
 const fmt = (n: number) => "₹" + Math.round(n).toLocaleString("en-IN");
-const fmtWhen = (iso: string) => {
-  if (!iso) return "";
-  try {
-    const d = new Date(iso);
-    return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) +
-      " · " + d.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" });
-  } catch { return iso.slice(0, 16); }
-};
+const fmtWhen = (iso: string) => (iso ? fmtDMYTime(iso) : "");
 
 type LedgerData = Awaited<ReturnType<typeof api.getCustomerLedger>>;
 

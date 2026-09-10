@@ -7,6 +7,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { theme } from "@/src/lib/theme";
 import { api, Customer, STATUS_COLOR, STATUS_LABEL } from "@/src/lib/api";
 import PunchSaleModal from "@/src/components/PunchSaleModal";
+import { fmtDMY } from "@/src/lib/date";
 
 export default function Followups() {
   const insets = useSafeAreaInsets();
@@ -63,7 +64,7 @@ export default function Followups() {
             <View style={[styles.metaBox, overdue && { backgroundColor: "#FDE8E6" }]}>
               <Ionicons name="calendar-outline" size={12} color={overdue ? theme.color.error : theme.color.muted} />
               <Text style={[styles.metaText, overdue && { color: theme.color.error, fontWeight: "700" }]}>
-                {overdue ? "Overdue " : "Follow-up "}{item.followup_date}
+                {overdue ? "Overdue " : "Follow-up "}{fmtDMY(item.followup_date)}
               </Text>
             </View>
           ) : null}
