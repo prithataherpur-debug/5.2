@@ -225,9 +225,15 @@ export type MoneyReceipt = {
   delivery_due_date?: string | null;
   delivered_at?: string | null;
   delivery_note?: string;
+  /** Advance receipts: amount already applied to sales/invoices */
+  allocated?: number;
+  /** Advance receipts: amount still available to apply */
+  remaining?: number;
   /** Daybook only: true = counted as fresh money in grand total; false = informational (linked to a source counted today) */
   counted_standalone?: boolean;
 };
+
+export type AdvanceAllocationIn = { receipt_id: string; amount: number };
 
 export const DENOMS = [500, 200, 100, 50, 20, 10] as const;
 
@@ -504,6 +510,7 @@ export const api = {
     items: { name: string; qty: number; unit_price: number; unit_cost?: number }[];
     notes?: string; customer_id?: string;
     attach_receipt_ids?: string[];
+    advance_allocations?: AdvanceAllocationIn[];
     cash_amount?: number; online_amount?: number;
   }) => req<Invoice>(`/invoices`, { method: "POST", body: JSON.stringify(body) }),
   getInvoice: (id: string) => req<Invoice>(`/invoices/${id}`),
@@ -644,6 +651,7 @@ export const api = {
     notes?: string;
     purchase_amount?: number;
     attach_receipt_ids?: string[];
+    advance_allocations?: AdvanceAllocationIn[];
   }) =>
     req<Sale>(`/sales`, { method: "POST", body: JSON.stringify(payload) }),
   deleteSale: (id: string) => req<{ deleted: boolean }>(`/sales/${id}`, { method: "DELETE" }),

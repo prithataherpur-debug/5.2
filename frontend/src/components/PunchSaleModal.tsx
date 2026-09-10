@@ -33,6 +33,7 @@ export default function PunchSaleModal({ visible, onClose, onSaved, presetCustom
   const [err, setErr] = useState("");
   const [advances, setAdvances] = useState<MoneyReceipt[]>([]);
   const [selectedAdvIds, setSelectedAdvIds] = useState<Set<string>>(new Set());
+  const [advAmounts, setAdvAmounts] = useState<Record<string, string>>({});
   const [advLoading, setAdvLoading] = useState(false);
 
   useEffect(() => {
@@ -50,13 +51,14 @@ export default function PunchSaleModal({ visible, onClose, onSaved, presetCustom
       setErr("");
       setAdvances([]);
       setSelectedAdvIds(new Set());
+      setAdvAmounts({});
     }
   }, [visible, presetCustomer]);
 
   // Fetch advance receipts for the selected customer (existing customer only)
   useEffect(() => {
     if (!visible || mode !== "existing" || !customer?.id) {
-      setAdvances([]); setSelectedAdvIds(new Set());
+      setAdvances([]); setSelectedAdvIds(new Set()); setAdvAmounts({});
       return;
     }
     let cancelled = false;
@@ -64,10 +66,14 @@ export default function PunchSaleModal({ visible, onClose, onSaved, presetCustom
     api.getAdvanceReceipts({ customer_id: customer.id })
       .then((res) => {
         if (cancelled) return;
-        setAdvances(res.advances || []);
-        setSelectedAdvIds(new Set((res.advances || []).map((r) => r.id))); // auto-select all
+        const adv = res.advances || [];
+        setAdvances(adv);
+        setSelectedAdvIds(new Set(adv.map((r) => r.id))); // auto-select all
+        const amts: Record<string, string> = {};
+        adv.forEach((r) => { amts[r.id] = String(Math.round(r.remaining ?? r.amount)); });
+        setAdvAmounts(amts);
       })
-      .catch(() => { if (!cancelled) { setAdvances([]); setSelectedAdvIds(new Set()); } })
+      .catch(() => { if (!cancelled) { setAdvances([]); setSelectedAdvIds(new Set()); setAdvAmounts({}); } })
       .finally(() => { if (!cancelled) setAdvLoading(false); });
     return () => { cancelled = true; };
   }, [visible, mode, customer?.id]);
@@ -85,6 +91,16 @@ export default function PunchSaleModal({ visible, onClose, onSaved, presetCustom
     setDupCustomer(null);
     setErr("");
   };
+
+  // Amount actually applied from an advance (parsed & capped at its remaining balance)
+  const appliedFor = (r: MoneyReceipt): number => {
+    if (!selectedAdvIds.has(r.id)) return 0;
+    const cap = r.remaining ?? r.amount;
+    const raw = parseFloat(advAmounts[r.id] ?? "");
+    if (!Number.isFinite(raw) || raw <= 0) return 0;
+    return Math.min(Math.round(raw * 100) / 100, cap);
+  };
+  const advTotalApplied = advances.reduce((s, r) => s + appliedFor(r), 0);
 
   const submit = async () => {
     const n = parseFloat(amount);
@@ -147,8 +163,14 @@ export default function PunchSaleModal({ visible, onClose, onSaved, presetCustom
         }
       }
 
-      // Only attach advances when we punched against the existing picked customer
-      const attachIds = (mode === "existing" && customer?.id) ? Array.from(selectedAdvIds) : [];
+      // Only attach advances when we punched against the existing picked customer.
+      // Partial amounts are supported via advance_allocations; the advance stays
+      // available (on both sale & invoice screens) until fully consumed.
+      const allocations = (mode === "existing" && customer?.id)
+        ? advances
+            .map((r) => ({ receipt_id: r.id, amount: appliedFor(r) }))
+            .filter((a) => a.amount > 0)
+        : [];
 
       await api.createSale({
         customer_id: customerId,
@@ -157,7 +179,7 @@ export default function PunchSaleModal({ visible, onClose, onSaved, presetCustom
         product: product.trim(),
         notes: notes.trim(),
         purchase_amount: purchaseVal,
-        attach_receipt_ids: attachIds,
+        advance_allocations: allocations,
       });
       onSaved();
     } catch (e: any) {
@@ -304,34 +326,67 @@ export default function PunchSaleModal({ visible, onClose, onSaved, presetCustom
                         {advances.length} advance receipt{advances.length > 1 ? "s" : ""} for this customer
                       </Text>
                     </View>
-                    <Text style={styles.advHint}>Tap to attach — attached advances get linked to this sale.</Text>
+                    <Text style={styles.advHint}>Tap to apply — enter how much of each advance to use. Unused balance stays available on sales & invoices.</Text>
                     {advances.map((r) => {
                       const on = selectedAdvIds.has(r.id);
+                      const rem = r.remaining ?? r.amount;
                       return (
-                        <Pressable
+                        <View
                           key={r.id}
-                          onPress={() => setSelectedAdvIds((prev) => {
-                            const next = new Set(prev);
-                            if (next.has(r.id)) next.delete(r.id); else next.add(r.id);
-                            return next;
-                          })}
                           style={[styles.advItem, on && styles.advItemOn]}
                           testID={`sale-adv-${r.id}`}
                         >
-                          <Ionicons name={on ? "checkbox" : "square-outline"} size={18} color={on ? theme.color.brand : theme.color.muted} />
+                          <Pressable
+                            onPress={() => setSelectedAdvIds((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(r.id)) next.delete(r.id); else next.add(r.id);
+                              return next;
+                            })}
+                            hitSlop={8}
+                          >
+                            <Ionicons name={on ? "checkbox" : "square-outline"} size={18} color={on ? theme.color.brand : theme.color.muted} />
+                          </Pressable>
                           <View style={{ flex: 1, marginLeft: 8 }}>
                             <Text style={styles.advItemNo}>{r.receipt_no} · {r.date_key}</Text>
-                            <Text style={styles.advItemMeta}>{r.payment_mode.toUpperCase()} · {r.narration || "Advance"}</Text>
+                            <Text style={styles.advItemMeta}>
+                              {r.payment_mode.toUpperCase()} · Available {fmtRcp(rem)}
+                              {(r.allocated ?? 0) > 0 ? ` · used ${fmtRcp(r.allocated ?? 0)}` : ""}
+                            </Text>
                           </View>
-                          <Text style={styles.advItemAmt}>{fmtRcp(r.amount)}</Text>
-                        </Pressable>
+                          {on ? (
+                            <View style={styles.advAmtWrap}>
+                              <Text style={styles.advAmtCurrency}>₹</Text>
+                              <TextInput
+                                value={advAmounts[r.id] ?? ""}
+                                onChangeText={(t) => {
+                                  const clean = t.replace(/[^0-9.]/g, "");
+                                  setAdvAmounts((prev) => ({ ...prev, [r.id]: clean }));
+                                }}
+                                onBlur={() => {
+                                  const raw = parseFloat(advAmounts[r.id] ?? "");
+                                  const capped = !Number.isFinite(raw) || raw <= 0
+                                    ? ""
+                                    : String(Math.min(Math.round(raw), Math.round(rem)));
+                                  setAdvAmounts((prev) => ({ ...prev, [r.id]: capped }));
+                                }}
+                                keyboardType="decimal-pad"
+                                placeholder="0"
+                                placeholderTextColor={theme.color.muted}
+                                style={styles.advAmtInput}
+                                testID={`sale-adv-amt-${r.id}`}
+                              />
+                            </View>
+                          ) : (
+                            <Text style={styles.advItemAmt}>{fmtRcp(rem)}</Text>
+                          )}
+                        </View>
                       );
                     })}
-                    {selectedAdvIds.size > 0 ? (
+                    {advTotalApplied > 0 ? (
                       <View style={styles.advFooter}>
-                        <Text style={styles.advFooterLabel}>Attaching</Text>
+                        <Text style={styles.advFooterLabel}>Applying</Text>
                         <Text style={styles.advFooterValue}>
-                          {fmtRcp(advances.filter((r) => selectedAdvIds.has(r.id)).reduce((s, r) => s + r.amount, 0))}
+                          {fmtRcp(advTotalApplied)}
                         </Text>
                       </View>
                     ) : null}
@@ -596,6 +651,18 @@ const styles = StyleSheet.create({
   advItemNo: { fontSize: 12, fontWeight: "800", color: theme.color.onSurface },
   advItemMeta: { fontSize: 10, color: theme.color.muted, marginTop: 1 },
   advItemAmt: { fontSize: 13, fontWeight: "800", color: theme.color.success },
+  advAmtWrap: {
+    flexDirection: "row", alignItems: "center",
+    borderWidth: 1, borderColor: theme.color.brand,
+    borderRadius: theme.radius.sm, backgroundColor: theme.color.surface,
+    paddingHorizontal: 6, minWidth: 84,
+  },
+  advAmtCurrency: { fontSize: 12, fontWeight: "800", color: theme.color.muted },
+  advAmtInput: {
+    flex: 1, height: 34, marginLeft: 2,
+    fontSize: 13, fontWeight: "800", color: theme.color.success,
+    textAlign: "right", paddingVertical: 0,
+  },
   advFooter: {
     marginTop: 8, paddingTop: 6, borderTopWidth: 1, borderTopColor: theme.color.brand + "33", borderStyle: "dashed",
     flexDirection: "row", justifyContent: "space-between",

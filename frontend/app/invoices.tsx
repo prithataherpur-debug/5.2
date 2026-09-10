@@ -267,6 +267,7 @@ function InvoiceEditor({
   const [err, setErr] = useState("");
   const [advances, setAdvances] = useState<MoneyReceipt[]>([]);
   const [selectedAdvIds, setSelectedAdvIds] = useState<Set<string>>(new Set());
+  const [advAmounts, setAdvAmounts] = useState<Record<string, string>>({});
   const [advLoading, setAdvLoading] = useState(false);
 
   useEffect(() => {
@@ -281,7 +282,7 @@ function InvoiceEditor({
       setPayMode((editing.payment_mode as any) || "cash");
       setCashPart(editing.payment_mode === "mixed" ? String(editing.cash_amount || "") : "");
       setOnlinePart(editing.payment_mode === "mixed" ? String(editing.online_amount || "") : "");
-      setErr(""); setAdvances([]); setSelectedAdvIds(new Set());
+      setErr(""); setAdvances([]); setSelectedAdvIds(new Set()); setAdvAmounts({});
       return;
     }
     setCustomer({ customer_id: null, name: "", mobile: "", address: "" });
@@ -291,6 +292,7 @@ function InvoiceEditor({
     setErr("");
     setAdvances([]);
     setSelectedAdvIds(new Set());
+    setAdvAmounts({});
   }, [visible, editing]);
 
   // Fetch advance receipts for the selected customer (new invoices only)
@@ -298,7 +300,7 @@ function InvoiceEditor({
     if (!visible || editing) return;
     const hasCustomer = customer.customer_id || (customer.mobile && customer.mobile.replace(/\D/g, "").length >= 6);
     if (!hasCustomer) {
-      setAdvances([]); setSelectedAdvIds(new Set());
+      setAdvances([]); setSelectedAdvIds(new Set()); setAdvAmounts({});
       return;
     }
     let cancelled = false;
@@ -311,9 +313,13 @@ function InvoiceEditor({
             : { phone: customer.mobile.trim() }
         );
         if (!cancelled) {
-          setAdvances(res.advances || []);
-          // Auto-select all by default (user can uncheck)
-          setSelectedAdvIds(new Set((res.advances || []).map((r) => r.id)));
+          const adv = res.advances || [];
+          setAdvances(adv);
+          // Auto-select all by default (user can uncheck) with full remaining pre-filled
+          setSelectedAdvIds(new Set(adv.map((r) => r.id)));
+          const amts: Record<string, string> = {};
+          adv.forEach((r) => { amts[r.id] = String(Math.round(r.remaining ?? r.amount)); });
+          setAdvAmounts(amts);
         }
       } catch { /* ignore */ } finally { setAdvLoading(false); }
     }, 400);
@@ -344,6 +350,16 @@ function InvoiceEditor({
 
   const addRow = () => setItems((prev) => [...prev, { id: String(Date.now() + Math.random()), name: "", qty: "1", rate: "", cost: "" }]);
   const removeRow = (id: string) => setItems((prev) => (prev.length === 1 ? prev : prev.filter((x) => x.id !== id)));
+
+  // Amount actually applied from an advance (parsed & capped at its remaining balance)
+  const advAppliedFor = (r: MoneyReceipt): number => {
+    if (!selectedAdvIds.has(r.id)) return 0;
+    const cap = r.remaining ?? r.amount;
+    const raw = parseFloat(advAmounts[r.id] ?? "");
+    if (!Number.isFinite(raw) || raw <= 0) return 0;
+    return Math.min(Math.round(raw * 100) / 100, cap);
+  };
+  const advTotalApplied = advances.reduce((s, r) => s + advAppliedFor(r), 0);
 
   const submit = async () => {
     if (!customer.name.trim()) { setErr("Customer name is required."); return; }
@@ -391,9 +407,13 @@ function InvoiceEditor({
         onSaved(inv, `Invoice ${inv.invoice_no} updated · PDF regenerated`);
         return;
       }
-      const inv = await api.createInvoice({ ...base, attach_receipt_ids: Array.from(selectedAdvIds) });
-      const msg = selectedAdvIds.size > 0
-        ? `Invoice ${inv.invoice_no} created · ${selectedAdvIds.size} advance receipt${selectedAdvIds.size > 1 ? "s" : ""} attached`
+      const allocations = advances
+        .map((r) => ({ receipt_id: r.id, amount: advAppliedFor(r) }))
+        .filter((a) => a.amount > 0);
+      const inv = await api.createInvoice({ ...base, advance_allocations: allocations });
+      const applied = allocations.length;
+      const msg = applied > 0
+        ? `Invoice ${inv.invoice_no} created · ${fmt(advTotalApplied)} advance applied`
         : `Invoice ${inv.invoice_no} created`;
       onSaved(inv, msg);
     } catch (e: any) {
@@ -428,40 +448,71 @@ function InvoiceEditor({
                     {advances.length} advance receipt{advances.length > 1 ? "s" : ""} for this customer
                   </Text>
                 </View>
-                <Text style={styles.advHint}>Tap to attach — attached receipts will be marked with this invoice number as reference.</Text>
+                <Text style={styles.advHint}>Tap to apply — enter how much of each advance to use. Unused balance stays available on sales & invoices.</Text>
                 {advances.map((r) => {
                   const on = selectedAdvIds.has(r.id);
+                  const rem = r.remaining ?? r.amount;
                   return (
-                    <Pressable
+                    <View
                       key={r.id}
-                      onPress={() => setSelectedAdvIds((prev) => {
-                        const next = new Set(prev);
-                        if (next.has(r.id)) next.delete(r.id); else next.add(r.id);
-                        return next;
-                      })}
                       style={[styles.advItem, on && styles.advItemOn]}
                       testID={`inv-adv-${r.id}`}
                     >
-                      <Ionicons
-                        name={on ? "checkbox" : "square-outline"}
-                        size={18}
-                        color={on ? theme.color.brand : theme.color.muted}
-                      />
+                      <Pressable
+                        onPress={() => setSelectedAdvIds((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(r.id)) next.delete(r.id); else next.add(r.id);
+                          return next;
+                        })}
+                        hitSlop={8}
+                      >
+                        <Ionicons
+                          name={on ? "checkbox" : "square-outline"}
+                          size={18}
+                          color={on ? theme.color.brand : theme.color.muted}
+                        />
+                      </Pressable>
                       <View style={{ flex: 1, marginLeft: 8 }}>
                         <Text style={styles.advItemNo}>{r.receipt_no} · {r.date_key}</Text>
                         <Text style={styles.advItemMeta}>
-                          {r.payment_mode.toUpperCase()} · {r.narration || "Advance"}
+                          {r.payment_mode.toUpperCase()} · Available {fmt(rem)}
+                          {(r.allocated ?? 0) > 0 ? ` · used ${fmt(r.allocated ?? 0)}` : ""}
                         </Text>
                       </View>
-                      <Text style={styles.advItemAmt}>{fmt(r.amount)}</Text>
-                    </Pressable>
+                      {on ? (
+                        <View style={styles.advAmtWrap}>
+                          <Text style={styles.advAmtCurrency}>₹</Text>
+                          <TextInput
+                            value={advAmounts[r.id] ?? ""}
+                            onChangeText={(t) => {
+                              const clean = t.replace(/[^0-9.]/g, "");
+                              setAdvAmounts((prev) => ({ ...prev, [r.id]: clean }));
+                            }}
+                            onBlur={() => {
+                              const raw = parseFloat(advAmounts[r.id] ?? "");
+                              const capped = !Number.isFinite(raw) || raw <= 0
+                                ? ""
+                                : String(Math.min(Math.round(raw), Math.round(rem)));
+                              setAdvAmounts((prev) => ({ ...prev, [r.id]: capped }));
+                            }}
+                            keyboardType="decimal-pad"
+                            placeholder="0"
+                            placeholderTextColor={theme.color.muted}
+                            style={styles.advAmtInput}
+                            testID={`inv-adv-amt-${r.id}`}
+                          />
+                        </View>
+                      ) : (
+                        <Text style={styles.advItemAmt}>{fmt(rem)}</Text>
+                      )}
+                    </View>
                   );
                 })}
-                {selectedAdvIds.size > 0 ? (
+                {advTotalApplied > 0 ? (
                   <View style={styles.advFooter}>
-                    <Text style={styles.advFooterLabel}>Attaching</Text>
+                    <Text style={styles.advFooterLabel}>Applying</Text>
                     <Text style={styles.advFooterValue}>
-                      {fmt(advances.filter((r) => selectedAdvIds.has(r.id)).reduce((s, r) => s + r.amount, 0))}
+                      {fmt(advTotalApplied)}
                     </Text>
                   </View>
                 ) : null}
@@ -662,6 +713,18 @@ const styles = StyleSheet.create({
   advItemNo: { fontSize: 12, fontWeight: "800", color: theme.color.onSurface },
   advItemMeta: { fontSize: 10, color: theme.color.muted, marginTop: 1 },
   advItemAmt: { fontSize: 13, fontWeight: "800", color: theme.color.success },
+  advAmtWrap: {
+    flexDirection: "row", alignItems: "center",
+    borderWidth: 1, borderColor: theme.color.brand,
+    borderRadius: theme.radius.sm, backgroundColor: theme.color.surface,
+    paddingHorizontal: 6, minWidth: 84,
+  },
+  advAmtCurrency: { fontSize: 12, fontWeight: "800", color: theme.color.muted },
+  advAmtInput: {
+    flex: 1, height: 34, marginLeft: 2,
+    fontSize: 13, fontWeight: "800", color: theme.color.success,
+    textAlign: "right", paddingVertical: 0,
+  },
   advFooter: {
     marginTop: 8, paddingTop: 6, borderTopWidth: 1, borderTopColor: theme.color.brand + "33", borderStyle: "dashed",
     flexDirection: "row", justifyContent: "space-between",
