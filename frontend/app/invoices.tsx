@@ -280,6 +280,7 @@ function InvoiceEditor({
   const [advances, setAdvances] = useState<MoneyReceipt[]>([]);
   const [selectedAdvIds, setSelectedAdvIds] = useState<Set<string>>(new Set());
   const [advAmounts, setAdvAmounts] = useState<Record<string, string>>({});
+  const [advTouched, setAdvTouched] = useState<Set<string>>(new Set());
   const [advLoading, setAdvLoading] = useState(false);
 
   useEffect(() => {
@@ -294,7 +295,7 @@ function InvoiceEditor({
       setPayMode((editing.payment_mode as any) || "cash");
       setCashPart(editing.payment_mode === "mixed" ? String(editing.cash_amount || "") : "");
       setOnlinePart(editing.payment_mode === "mixed" ? String(editing.online_amount || "") : "");
-      setErr(""); setAdvances([]); setSelectedAdvIds(new Set()); setAdvAmounts({});
+      setErr(""); setAdvances([]); setSelectedAdvIds(new Set()); setAdvAmounts({}); setAdvTouched(new Set());
       return;
     }
     setCustomer({ customer_id: null, name: "", mobile: "", address: "" });
@@ -305,6 +306,7 @@ function InvoiceEditor({
     setAdvances([]);
     setSelectedAdvIds(new Set());
     setAdvAmounts({});
+    setAdvTouched(new Set());
   }, [visible, editing]);
 
   // Fetch advance receipts for the selected customer (new invoices only)
@@ -312,7 +314,7 @@ function InvoiceEditor({
     if (!visible || editing) return;
     const hasCustomer = customer.customer_id || (customer.mobile && customer.mobile.replace(/\D/g, "").length >= 6);
     if (!hasCustomer) {
-      setAdvances([]); setSelectedAdvIds(new Set()); setAdvAmounts({});
+      setAdvances([]); setSelectedAdvIds(new Set()); setAdvAmounts({}); setAdvTouched(new Set());
       return;
     }
     let cancelled = false;
@@ -327,11 +329,11 @@ function InvoiceEditor({
         if (!cancelled) {
           const adv = res.advances || [];
           setAdvances(adv);
-          // Auto-select all by default (user can uncheck) with full remaining pre-filled
+          // Auto-select all by default (user can uncheck). Amounts are NOT pre-filled
+          // with the full remaining balance here — the reactive effect below auto-fills
+          // them with only what the invoice total needs, so leftovers stay as credit.
           setSelectedAdvIds(new Set(adv.map((r) => r.id)));
-          const amts: Record<string, string> = {};
-          adv.forEach((r) => { amts[r.id] = String(Math.round(r.remaining ?? r.amount)); });
-          setAdvAmounts(amts);
+          setAdvTouched(new Set()); // new list → back to auto amounts
         }
       } catch { /* ignore */ } finally { setAdvLoading(false); }
     }, 400);
@@ -372,6 +374,36 @@ function InvoiceEditor({
     return Math.min(Math.round(raw * 100) / 100, cap);
   };
   const advTotalApplied = advances.reduce((s, r) => s + advAppliedFor(r), 0);
+  const advTotalRemaining = advances.reduce((s, r) => s + (r.remaining ?? r.amount), 0);
+
+  // Reactive default: each selected, untouched advance auto-fills with only what the
+  // invoice total still needs (waterfall, in listed order), capped at its remaining
+  // balance. This way a larger advance is NOT consumed in one go — the leftover stays
+  // as credit and the receipt keeps showing (receipt no + remaining) until fully cleared.
+  // Amounts the user edited manually (advTouched) are never overwritten.
+  useEffect(() => {
+    if (!visible || editing || advances.length === 0) return;
+    const hasAmt = total > 0;
+    setAdvAmounts((prev) => {
+      let left = hasAmt ? total : Number.POSITIVE_INFINITY;
+      const next = { ...prev };
+      let changed = false;
+      for (const r of advances) {
+        if (!selectedAdvIds.has(r.id)) continue;
+        const rem = r.remaining ?? r.amount;
+        if (advTouched.has(r.id)) {
+          const v = parseFloat(prev[r.id] ?? "");
+          if (Number.isFinite(v) && v > 0) left -= Math.min(v, rem);
+          continue;
+        }
+        const use = Math.max(0, Math.min(rem, left));
+        const val = String(Math.round(use * 100) / 100);
+        if (next[r.id] !== val) { next[r.id] = val; changed = true; }
+        left -= use;
+      }
+      return changed ? next : prev;
+    });
+  }, [visible, editing, advances, total, selectedAdvIds, advTouched]);
 
   const submit = async () => {
     if (!customer.name.trim()) { setErr("Customer name is required."); return; }
@@ -499,6 +531,12 @@ function InvoiceEditor({
                             onChangeText={(t) => {
                               const clean = t.replace(/[^0-9.]/g, "");
                               setAdvAmounts((prev) => ({ ...prev, [r.id]: clean }));
+                              setAdvTouched((prev) => {
+                                const next = new Set(prev);
+                                if (clean === "") next.delete(r.id); // cleared → back to auto
+                                else next.add(r.id);
+                                return next;
+                              });
                             }}
                             onBlur={() => {
                               const raw = parseFloat(advAmounts[r.id] ?? "");
@@ -525,6 +563,9 @@ function InvoiceEditor({
                     <Text style={styles.advFooterLabel}>Applying</Text>
                     <Text style={styles.advFooterValue}>
                       {fmt(advTotalApplied)}
+                      {advTotalRemaining - advTotalApplied > 0
+                        ? `  ·  credit left ${fmt(advTotalRemaining - advTotalApplied)}`
+                        : ""}
                     </Text>
                   </View>
                 ) : null}

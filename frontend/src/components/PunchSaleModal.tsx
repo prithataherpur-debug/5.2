@@ -61,13 +61,13 @@ export default function PunchSaleModal({ visible, onClose, onSaved, presetCustom
   // Existing mode → look up by customer_id. New-customer mode → look up by typed phone.
   // This keeps a customer's leftover advances visible on the sale form until fully used.
   useEffect(() => {
-    if (!visible) { setAdvances([]); setSelectedAdvIds(new Set()); setAdvAmounts({}); return; }
+    if (!visible) { setAdvances([]); setSelectedAdvIds(new Set()); setAdvAmounts({}); setAdvTouched(new Set()); return; }
     const phoneDigits = newPhone.replace(/\D/g, "");
     const query = mode === "existing" && customer?.id
       ? { customer_id: customer.id }
       : (mode === "new" && phoneDigits.length >= 6 ? { phone: newPhone.trim() } : null);
     if (!query) {
-      setAdvances([]); setSelectedAdvIds(new Set()); setAdvAmounts({});
+      setAdvances([]); setSelectedAdvIds(new Set()); setAdvAmounts({}); setAdvTouched(new Set());
       return;
     }
     let cancelled = false;
@@ -76,11 +76,11 @@ export default function PunchSaleModal({ visible, onClose, onSaved, presetCustom
       const adv = res.advances || [];
       setAdvances(adv);
       setSelectedAdvIds(new Set(adv.map((r) => r.id))); // auto-select all
-      const amts: Record<string, string> = {};
-      adv.forEach((r) => { amts[r.id] = String(Math.round(r.remaining ?? r.amount)); });
-      setAdvAmounts(amts);
+      setAdvTouched(new Set()); // new list → back to auto amounts
+      // Per-advance amounts are NOT pre-filled with the full remaining balance here.
+      // The reactive effect below auto-fills them with only what the sale amount needs.
     };
-    const fail = () => { if (!cancelled) { setAdvances([]); setSelectedAdvIds(new Set()); setAdvAmounts({}); } };
+    const fail = () => { if (!cancelled) { setAdvances([]); setSelectedAdvIds(new Set()); setAdvAmounts({}); setAdvTouched(new Set()); } };
     setAdvLoading(true);
     // Debounce phone lookups; existing-customer lookups fire immediately.
     const delay = "phone" in query ? 400 : 0;
@@ -92,6 +92,37 @@ export default function PunchSaleModal({ visible, onClose, onSaved, presetCustom
     }, delay);
     return () => { cancelled = true; clearTimeout(t); };
   }, [visible, mode, customer?.id, newPhone]);
+
+  // Reactive default: each selected, untouched advance auto-fills with only what the
+  // sale amount still needs (waterfall, in listed order), capped at its remaining
+  // balance. This way a larger advance is NOT consumed in one go — the leftover stays
+  // as credit and the receipt keeps showing (receipt no + remaining) until fully cleared.
+  // Amounts the user edited manually (advTouched) are never overwritten.
+  useEffect(() => {
+    if (!visible || advances.length === 0) return;
+    const saleAmt = parseFloat(amount);
+    const hasAmt = Number.isFinite(saleAmt) && saleAmt > 0;
+    setAdvAmounts((prev) => {
+      let left = hasAmt ? saleAmt : Number.POSITIVE_INFINITY;
+      const next = { ...prev };
+      let changed = false;
+      for (const r of advances) {
+        if (!selectedAdvIds.has(r.id)) continue;
+        const rem = r.remaining ?? r.amount;
+        if (advTouched.has(r.id)) {
+          const v = parseFloat(prev[r.id] ?? "");
+          if (Number.isFinite(v) && v > 0) left -= Math.min(v, rem);
+          continue;
+        }
+        const use = Math.max(0, Math.min(rem, left));
+        const val = String(Math.round(use * 100) / 100);
+        if (next[r.id] !== val) { next[r.id] = val; changed = true; }
+        left -= use;
+      }
+      return changed ? next : prev;
+    });
+  }, [visible, advances, amount, selectedAdvIds, advTouched]);
+
 
   // Clear duplicate banner when user edits the phone
   useEffect(() => {
@@ -116,6 +147,7 @@ export default function PunchSaleModal({ visible, onClose, onSaved, presetCustom
     return Math.min(Math.round(raw * 100) / 100, cap);
   };
   const advTotalApplied = advances.reduce((s, r) => s + appliedFor(r), 0);
+  const advTotalRemaining = advances.reduce((s, r) => s + (r.remaining ?? r.amount), 0);
 
   const submit = async () => {
     const n = parseFloat(amount);
@@ -374,6 +406,12 @@ export default function PunchSaleModal({ visible, onClose, onSaved, presetCustom
                                 onChangeText={(t) => {
                                   const clean = t.replace(/[^0-9.]/g, "");
                                   setAdvAmounts((prev) => ({ ...prev, [r.id]: clean }));
+                                  setAdvTouched((prev) => {
+                                    const next = new Set(prev);
+                                    if (clean === "") next.delete(r.id); // cleared → back to auto
+                                    else next.add(r.id);
+                                    return next;
+                                  });
                                 }}
                                 onBlur={() => {
                                   const raw = parseFloat(advAmounts[r.id] ?? "");
@@ -400,6 +438,9 @@ export default function PunchSaleModal({ visible, onClose, onSaved, presetCustom
                         <Text style={styles.advFooterLabel}>Applying</Text>
                         <Text style={styles.advFooterValue}>
                           {fmtRcp(advTotalApplied)}
+                          {advTotalRemaining - advTotalApplied > 0
+                            ? `  ·  credit left ${fmtRcp(advTotalRemaining - advTotalApplied)}`
+                            : ""}
                         </Text>
                       </View>
                     ) : null}
