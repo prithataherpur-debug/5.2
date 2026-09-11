@@ -1,601 +1,314 @@
 #!/usr/bin/env python3
 """
-Comprehensive backend test for TEAM-STATS ENDPOINT:
-GET /api/admin/team-stats with period filter (today/week/month/all)
-Per-employee total sell (sales+invoices), revenue, profit + admin row + grand totals
+Backend test for employee seeding verification.
+Tests that only admin + emp1 exist after the seed change (range(1,8) → range(1,2)).
 """
-
 import requests
-import json
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+import sys
 
-# Base URL - using the PUBLIC URL
-BASE_URL = "https://project-open-10.preview.emergentagent.com/api"
+BASE_URL = "https://f88dd101-329c-4578-96fc-edb74cff4162.preview.emergentagent.com/api"
 
-# Credentials
-ADMIN_CREDS = {"username": "admin", "password": "Admin@2026"}
-EMP1_CREDS = {"username": "emp1", "password": "Emp@2026"}
+# Test credentials from /app/memory/test_credentials.md
+ADMIN_USER = "admin"
+ADMIN_PASS = "Admin@2026"
+EMP1_USER = "emp1"
+EMP1_PASS = "Emp@2026"
+EMP2_USER = "emp2"
+EMP2_PASS = "Emp@2026"
 
-# Test data tracking for cleanup
-test_data = {
-    "sales": [],
-    "invoices": [],
-    "receipts": [],
-    "customers": []
-}
-
-# CRITICAL: Known REAL USER DATA - DO NOT DELETE
-REAL_USER_DATA = {
-    "sale": "36cb7374-128a-41fe-b8ef-d48bf03492c6",  # ₹10000
-    "invoice": "e5d334e7-1341-4f30-a697-1d689e9c17ec",  # ₹5000
-    "receipt": "a5361459-582d-47b5-a0ab-ec712800f62b"  # ₹10000
-}
-
-
-def login(creds: Dict[str, str]) -> str:
-    """Login and return access token."""
-    resp = requests.post(f"{BASE_URL}/auth/login", json=creds)
+def test_admin_login():
+    """Test 1: Admin login should succeed with 200 + access_token"""
+    print("\n[TEST 1] Admin login (admin/Admin@2026)...")
+    resp = requests.post(f"{BASE_URL}/auth/login", json={
+        "username": ADMIN_USER,
+        "password": ADMIN_PASS
+    }, timeout=10)
+    
     if resp.status_code != 200:
-        raise Exception(f"Login failed: {resp.status_code} {resp.text}")
-    return resp.json()["access_token"]
-
-
-def get_headers(token: str) -> Dict[str, str]:
-    """Return authorization headers."""
-    return {"Authorization": f"Bearer {token}"}
-
-
-def get_today() -> str:
-    """Get today's date in YYYY-MM-DD format."""
-    return datetime.now().strftime("%Y-%m-%d")
-
-
-def create_test_customer(token: str, name: str, phone: str) -> Dict:
-    """Create a test customer and track for cleanup."""
-    payload = {
-        "name": name,
-        "phone": phone,
-        "address": "Test Address"
-    }
-    resp = requests.post(f"{BASE_URL}/customers", json=payload, headers=get_headers(token))
-    if resp.status_code == 200:
-        customer = resp.json()
-        test_data["customers"].append(customer["id"])
-        return customer
-    return {}
-
-
-def cleanup():
-    """Clean up all test data created during testing."""
-    print("\n" + "="*80)
-    print("CLEANUP: Removing test data...")
-    print("="*80)
+        print(f"  ❌ FAILED: Expected 200, got {resp.status_code}")
+        print(f"  Response: {resp.text}")
+        return None
     
-    # Login as admin for cleanup
-    admin_token = login(ADMIN_CREDS)
-    headers = get_headers(admin_token)
+    data = resp.json()
+    if "access_token" not in data:
+        print(f"  ❌ FAILED: No access_token in response")
+        print(f"  Response: {data}")
+        return None
     
-    # Delete test sales (SKIP REAL USER DATA)
-    for sale_id in test_data["sales"]:
-        if sale_id == REAL_USER_DATA["sale"]:
-            print(f"⊗ SKIPPED REAL USER DATA: sale {sale_id}")
-            continue
-        try:
-            resp = requests.delete(f"{BASE_URL}/sales/{sale_id}", headers=headers)
-            if resp.status_code == 200:
-                print(f"✓ Deleted sale {sale_id}")
-        except Exception as e:
-            print(f"✗ Failed to delete sale {sale_id}: {e}")
-    
-    # Delete test invoices (SKIP REAL USER DATA)
-    for invoice_id in test_data["invoices"]:
-        if invoice_id == REAL_USER_DATA["invoice"]:
-            print(f"⊗ SKIPPED REAL USER DATA: invoice {invoice_id}")
-            continue
-        try:
-            resp = requests.delete(f"{BASE_URL}/invoices/{invoice_id}", headers=headers)
-            if resp.status_code == 200:
-                print(f"✓ Deleted invoice {invoice_id}")
-        except Exception as e:
-            print(f"✗ Failed to delete invoice {invoice_id}: {e}")
-    
-    # Delete test receipts (SKIP REAL USER DATA)
-    for receipt_id in test_data["receipts"]:
-        if receipt_id == REAL_USER_DATA["receipt"]:
-            print(f"⊗ SKIPPED REAL USER DATA: receipt {receipt_id}")
-            continue
-        try:
-            resp = requests.delete(f"{BASE_URL}/receipts/{receipt_id}", headers=headers)
-            if resp.status_code == 200:
-                print(f"✓ Deleted receipt {receipt_id}")
-        except Exception as e:
-            print(f"✗ Failed to delete receipt {receipt_id}: {e}")
-    
-    # Delete test customers
-    for customer_id in test_data["customers"]:
-        try:
-            resp = requests.delete(f"{BASE_URL}/customers/{customer_id}", headers=headers)
-            if resp.status_code == 200:
-                print(f"✓ Deleted customer {customer_id}")
-        except Exception as e:
-            print(f"✗ Failed to delete customer {customer_id}: {e}")
-    
-    print("="*80)
-    print("CLEANUP COMPLETE")
-    print("="*80 + "\n")
+    print(f"  ✅ PASSED: Admin login successful, got access_token")
+    return data["access_token"]
 
 
-def run_tests():
-    """Run all team-stats endpoint tests."""
-    print("\n" + "="*80)
-    print("TEAM-STATS ENDPOINT TEST SUITE")
-    print("="*80)
-    print(f"Base URL: {BASE_URL}")
-    print(f"Today's date: {get_today()}")
-    print("="*80 + "\n")
+def test_emp1_login():
+    """Test 2: emp1 login should succeed with 200 + access_token"""
+    print("\n[TEST 2] emp1 login (emp1/Emp@2026)...")
+    resp = requests.post(f"{BASE_URL}/auth/login", json={
+        "username": EMP1_USER,
+        "password": EMP1_PASS
+    }, timeout=10)
     
-    results = {
-        "passed": 0,
-        "failed": 0,
-        "tests": []
-    }
+    if resp.status_code != 200:
+        print(f"  ❌ FAILED: Expected 200, got {resp.status_code}")
+        print(f"  Response: {resp.text}")
+        return None
     
-    try:
-        # Login
-        print("Logging in...")
-        admin_token = login(ADMIN_CREDS)
-        emp1_token = login(EMP1_CREDS)
-        print("✓ Login successful\n")
-        
-        # ========================================================================
-        # TEST (a): Default (no period param) → period='today'
-        # Expected: totals {sales_count:1, invoices_count:0, total_count:1, revenue:10000, profit:500}
-        # admin object all zeros; emp1 row has all 5 new fields
-        # ========================================================================
-        print("TEST (a): GET /api/admin/team-stats (default/no period) → period='today'")
-        print("-" * 80)
-        resp = requests.get(f"{BASE_URL}/admin/team-stats", headers=get_headers(admin_token))
-        if resp.status_code == 200:
-            data = resp.json()
-            print(f"✓ Response 200 OK")
-            print(f"  Period: {data.get('period')}")
-            print(f"  Totals: {data.get('totals')}")
-            print(f"  Admin: {data.get('admin')}")
-            
-            # Verify period is 'today'
-            if data.get('period') == 'today':
-                print(f"  ✓ Period is 'today' (default)")
-            else:
-                print(f"  ✗ Period is '{data.get('period')}', expected 'today'")
-            
-            # Verify totals structure
-            totals = data.get('totals', {})
-            expected_totals = {
-                "sales_count": 1,
-                "invoices_count": 0,
-                "total_count": 1,
-                "revenue": 10000,
-                "profit": 500
-            }
-            
-            totals_match = True
-            for key, expected_val in expected_totals.items():
-                actual_val = totals.get(key)
-                if actual_val == expected_val:
-                    print(f"  ✓ totals.{key} = {actual_val} (expected {expected_val})")
-                else:
-                    print(f"  ✗ totals.{key} = {actual_val}, expected {expected_val}")
-                    totals_match = False
-            
-            # Verify admin object (should be all zeros)
-            admin_obj = data.get('admin', {})
-            admin_zeros = (
-                admin_obj.get('sales_count') == 0 and
-                admin_obj.get('invoices_count') == 0 and
-                admin_obj.get('total_count') == 0 and
-                admin_obj.get('revenue') == 0 and
-                admin_obj.get('profit') == 0
-            )
-            if admin_zeros:
-                print(f"  ✓ Admin object all zeros: {admin_obj}")
-            else:
-                print(f"  ✗ Admin object NOT all zeros: {admin_obj}")
-            
-            # Verify emp1 row has all 5 new fields
-            rows = data.get('rows', [])
-            emp1_row = next((r for r in rows if r.get('username') == 'emp1'), None)
-            if emp1_row:
-                required_fields = ['sales_count', 'invoices_count', 'total_count', 'revenue', 'profit']
-                emp1_has_fields = all(field in emp1_row for field in required_fields)
-                if emp1_has_fields:
-                    print(f"  ✓ emp1 row has all 5 fields: sales_count={emp1_row.get('sales_count')}, invoices_count={emp1_row.get('invoices_count')}, total_count={emp1_row.get('total_count')}, revenue={emp1_row.get('revenue')}, profit={emp1_row.get('profit')}")
-                else:
-                    print(f"  ✗ emp1 row missing fields: {emp1_row}")
-            else:
-                print(f"  ✗ emp1 row not found in rows")
-                emp1_has_fields = False
-            
-            if data.get('period') == 'today' and totals_match and admin_zeros and emp1_has_fields:
-                print(f"✓ PASS: TEST (a)")
-                results["passed"] += 1
-                results["tests"].append({"test": "TEST (a)", "status": "PASS", "details": "Default period='today' with correct totals"})
-            else:
-                print(f"✗ FAIL: TEST (a)")
-                results["failed"] += 1
-                results["tests"].append({"test": "TEST (a)", "status": "FAIL", "details": "Period or totals mismatch"})
-        else:
-            print(f"✗ FAIL: Response {resp.status_code} {resp.text}")
-            results["failed"] += 1
-            results["tests"].append({"test": "TEST (a)", "status": "FAIL", "details": f"API error: {resp.status_code}"})
-        print()
-        
-        # ========================================================================
-        # TEST (b): period=week, period=month, period=all
-        # Expected: totals {sales_count:1, invoices_count:1, total_count:2, revenue:15000, profit:1500}
-        # (₹5000 invoice dated 2026-09-09 = yesterday, excluded from 'today', included in week/month/all)
-        # ========================================================================
-        for period in ['week', 'month', 'all']:
-            print(f"TEST (b.{period}): GET /api/admin/team-stats?period={period}")
-            print("-" * 80)
-            resp = requests.get(f"{BASE_URL}/admin/team-stats?period={period}", headers=get_headers(admin_token))
-            if resp.status_code == 200:
-                data = resp.json()
-                print(f"✓ Response 200 OK")
-                print(f"  Period: {data.get('period')}")
-                print(f"  Totals: {data.get('totals')}")
-                
-                # Verify period
-                if data.get('period') == period:
-                    print(f"  ✓ Period is '{period}'")
-                else:
-                    print(f"  ✗ Period is '{data.get('period')}', expected '{period}'")
-                
-                # Verify totals
-                totals = data.get('totals', {})
-                expected_totals = {
-                    "sales_count": 1,
-                    "invoices_count": 1,
-                    "total_count": 2,
-                    "revenue": 15000,
-                    "profit": 1500
-                }
-                
-                totals_match = True
-                for key, expected_val in expected_totals.items():
-                    actual_val = totals.get(key)
-                    if actual_val == expected_val:
-                        print(f"  ✓ totals.{key} = {actual_val} (expected {expected_val})")
-                    else:
-                        print(f"  ✗ totals.{key} = {actual_val}, expected {expected_val}")
-                        totals_match = False
-                
-                if data.get('period') == period and totals_match:
-                    print(f"✓ PASS: TEST (b.{period})")
-                    results["passed"] += 1
-                    results["tests"].append({"test": f"TEST (b.{period})", "status": "PASS", "details": f"period={period} with correct totals"})
-                else:
-                    print(f"✗ FAIL: TEST (b.{period})")
-                    results["failed"] += 1
-                    results["tests"].append({"test": f"TEST (b.{period})", "status": "FAIL", "details": "Period or totals mismatch"})
-            else:
-                print(f"✗ FAIL: Response {resp.status_code} {resp.text}")
-                results["failed"] += 1
-                results["tests"].append({"test": f"TEST (b.{period})", "status": "FAIL", "details": f"API error: {resp.status_code}"})
-            print()
-        
-        # ========================================================================
-        # TEST (c): Create sale as emp1 today → verify totals increase → DELETE
-        # ========================================================================
-        print("TEST (c): Create sale as emp1 today (amount 1000, purchase_amount 200)")
-        print("-" * 80)
-        
-        # Create test customer
-        customer = create_test_customer(emp1_token, "Team Stats Test Customer", "9991112222")
-        if not customer:
-            print("✗ Failed to create test customer")
-            results["failed"] += 1
-            results["tests"].append({"test": "TEST (c)", "status": "FAIL", "details": "Customer creation failed"})
-        else:
-            customer_id = customer["id"]
-            print(f"  Created customer {customer_id}")
-            
-            # Get baseline totals
-            resp_before = requests.get(f"{BASE_URL}/admin/team-stats?period=today", headers=get_headers(admin_token))
-            if resp_before.status_code == 200:
-                totals_before = resp_before.json().get('totals', {})
-                revenue_before = totals_before.get('revenue', 0)
-                profit_before = totals_before.get('profit', 0)
-                print(f"  Baseline: revenue={revenue_before}, profit={profit_before}")
-                
-                # Create sale
-                sale_payload = {
-                    "customer_id": customer_id,
-                    "customer_name": "Team Stats Test Customer",
-                    "amount": 1000,
-                    "purchase_amount": 200,
-                    "payment_mode": "cash",
-                    "product": "Test Product",
-                    "notes": "Team stats test sale"
-                }
-                resp_sale = requests.post(f"{BASE_URL}/sales", json=sale_payload, headers=get_headers(emp1_token))
-                if resp_sale.status_code == 200:
-                    sale = resp_sale.json()
-                    test_data["sales"].append(sale["id"])
-                    print(f"  ✓ Created sale {sale['id']}")
-                    
-                    # Get updated totals
-                    resp_after = requests.get(f"{BASE_URL}/admin/team-stats?period=today", headers=get_headers(admin_token))
-                    if resp_after.status_code == 200:
-                        totals_after = resp_after.json().get('totals', {})
-                        revenue_after = totals_after.get('revenue', 0)
-                        profit_after = totals_after.get('profit', 0)
-                        print(f"  After: revenue={revenue_after}, profit={profit_after}")
-                        
-                        revenue_increase = revenue_after - revenue_before
-                        profit_increase = profit_after - profit_before
-                        
-                        if revenue_increase == 1000:
-                            print(f"  ✓ Revenue increased by 1000 (actual: {revenue_increase})")
-                        else:
-                            print(f"  ✗ Revenue increased by {revenue_increase}, expected 1000")
-                        
-                        if profit_increase == 800:
-                            print(f"  ✓ Profit increased by 800 (actual: {profit_increase})")
-                        else:
-                            print(f"  ✗ Profit increased by {profit_increase}, expected 800")
-                        
-                        if revenue_increase == 1000 and profit_increase == 800:
-                            print(f"✓ PASS: TEST (c)")
-                            results["passed"] += 1
-                            results["tests"].append({"test": "TEST (c)", "status": "PASS", "details": "Sale creation increases totals correctly"})
-                        else:
-                            print(f"✗ FAIL: TEST (c)")
-                            results["failed"] += 1
-                            results["tests"].append({"test": "TEST (c)", "status": "FAIL", "details": f"Revenue +{revenue_increase}, Profit +{profit_increase}"})
-                    else:
-                        print(f"  ✗ Failed to get stats after: {resp_after.status_code}")
-                        results["failed"] += 1
-                        results["tests"].append({"test": "TEST (c)", "status": "FAIL", "details": "Stats fetch failed"})
-                else:
-                    print(f"  ✗ Failed to create sale: {resp_sale.status_code} {resp_sale.text}")
-                    results["failed"] += 1
-                    results["tests"].append({"test": "TEST (c)", "status": "FAIL", "details": "Sale creation failed"})
-            else:
-                print(f"  ✗ Failed to get baseline stats: {resp_before.status_code}")
-                results["failed"] += 1
-                results["tests"].append({"test": "TEST (c)", "status": "FAIL", "details": "Baseline stats fetch failed"})
-        print()
-        
-        # ========================================================================
-        # TEST (d): Create invoice as admin today → verify admin object and totals → DELETE
-        # ========================================================================
-        print("TEST (d): Create invoice as admin today (items total 2000, unit_cost 500)")
-        print("-" * 80)
-        
-        # Create test customer
-        customer2 = create_test_customer(admin_token, "Admin Invoice Test Customer", "9993334444")
-        if not customer2:
-            print("✗ Failed to create test customer")
-            results["failed"] += 1
-            results["tests"].append({"test": "TEST (d)", "status": "FAIL", "details": "Customer creation failed"})
-        else:
-            customer2_id = customer2["id"]
-            print(f"  Created customer {customer2_id}")
-            
-            # Get baseline
-            resp_before = requests.get(f"{BASE_URL}/admin/team-stats?period=today", headers=get_headers(admin_token))
-            if resp_before.status_code == 200:
-                data_before = resp_before.json()
-                admin_before = data_before.get('admin', {})
-                totals_before = data_before.get('totals', {})
-                print(f"  Baseline admin: {admin_before}")
-                print(f"  Baseline totals: {totals_before}")
-                
-                # Create invoice
-                invoice_payload = {
-                    "customer_name": "Admin Invoice Test Customer",
-                    "customer_mobile": "9993334444",
-                    "customer_id": customer2_id,
-                    "items": [
-                        {
-                            "name": "Test Item",
-                            "qty": 1,
-                            "unit_price": 2000,
-                            "unit_cost": 500
-                        }
-                    ],
-                    "notes": "Admin team stats test invoice"
-                }
-                resp_invoice = requests.post(f"{BASE_URL}/invoices", json=invoice_payload, headers=get_headers(admin_token))
-                if resp_invoice.status_code == 200:
-                    invoice = resp_invoice.json()
-                    test_data["invoices"].append(invoice["id"])
-                    print(f"  ✓ Created invoice {invoice['id']}")
-                    
-                    # Get updated stats
-                    resp_after = requests.get(f"{BASE_URL}/admin/team-stats?period=today", headers=get_headers(admin_token))
-                    if resp_after.status_code == 200:
-                        data_after = resp_after.json()
-                        admin_after = data_after.get('admin', {})
-                        totals_after = data_after.get('totals', {})
-                        print(f"  After admin: {admin_after}")
-                        print(f"  After totals: {totals_after}")
-                        
-                        # Verify admin object
-                        admin_checks = []
-                        if admin_after.get('total_count') == admin_before.get('total_count', 0) + 1:
-                            print(f"  ✓ admin.total_count increased by 1")
-                            admin_checks.append(True)
-                        else:
-                            print(f"  ✗ admin.total_count = {admin_after.get('total_count')}, expected {admin_before.get('total_count', 0) + 1}")
-                            admin_checks.append(False)
-                        
-                        if admin_after.get('revenue') == admin_before.get('revenue', 0) + 2000:
-                            print(f"  ✓ admin.revenue increased by 2000")
-                            admin_checks.append(True)
-                        else:
-                            print(f"  ✗ admin.revenue = {admin_after.get('revenue')}, expected {admin_before.get('revenue', 0) + 2000}")
-                            admin_checks.append(False)
-                        
-                        if admin_after.get('profit') == admin_before.get('profit', 0) + 1500:
-                            print(f"  ✓ admin.profit increased by 1500")
-                            admin_checks.append(True)
-                        else:
-                            print(f"  ✗ admin.profit = {admin_after.get('profit')}, expected {admin_before.get('profit', 0) + 1500}")
-                            admin_checks.append(False)
-                        
-                        # Verify totals include admin
-                        totals_revenue_increase = totals_after.get('revenue', 0) - totals_before.get('revenue', 0)
-                        totals_profit_increase = totals_after.get('profit', 0) - totals_before.get('profit', 0)
-                        
-                        if totals_revenue_increase == 2000:
-                            print(f"  ✓ totals.revenue increased by 2000")
-                            admin_checks.append(True)
-                        else:
-                            print(f"  ✗ totals.revenue increased by {totals_revenue_increase}, expected 2000")
-                            admin_checks.append(False)
-                        
-                        if totals_profit_increase == 1500:
-                            print(f"  ✓ totals.profit increased by 1500")
-                            admin_checks.append(True)
-                        else:
-                            print(f"  ✗ totals.profit increased by {totals_profit_increase}, expected 1500")
-                            admin_checks.append(False)
-                        
-                        if all(admin_checks):
-                            print(f"✓ PASS: TEST (d)")
-                            results["passed"] += 1
-                            results["tests"].append({"test": "TEST (d)", "status": "PASS", "details": "Admin invoice increases admin object and totals correctly"})
-                        else:
-                            print(f"✗ FAIL: TEST (d)")
-                            results["failed"] += 1
-                            results["tests"].append({"test": "TEST (d)", "status": "FAIL", "details": "Admin object or totals mismatch"})
-                    else:
-                        print(f"  ✗ Failed to get stats after: {resp_after.status_code}")
-                        results["failed"] += 1
-                        results["tests"].append({"test": "TEST (d)", "status": "FAIL", "details": "Stats fetch failed"})
-                else:
-                    print(f"  ✗ Failed to create invoice: {resp_invoice.status_code} {resp_invoice.text}")
-                    results["failed"] += 1
-                    results["tests"].append({"test": "TEST (d)", "status": "FAIL", "details": "Invoice creation failed"})
-            else:
-                print(f"  ✗ Failed to get baseline stats: {resp_before.status_code}")
-                results["failed"] += 1
-                results["tests"].append({"test": "TEST (d)", "status": "FAIL", "details": "Baseline stats fetch failed"})
-        print()
-        
-        # ========================================================================
-        # TEST (e): emp1 GET /api/admin/team-stats → 403
-        # ========================================================================
-        print("TEST (e): emp1 GET /api/admin/team-stats → must be 403")
-        print("-" * 80)
-        resp = requests.get(f"{BASE_URL}/admin/team-stats", headers=get_headers(emp1_token))
-        if resp.status_code == 403:
-            print(f"✓ PASS: emp1 correctly blocked with 403")
-            results["passed"] += 1
-            results["tests"].append({"test": "TEST (e)", "status": "PASS", "details": "Non-admin correctly blocked"})
-        else:
-            print(f"✗ FAIL: Expected 403, got {resp.status_code}")
-            results["failed"] += 1
-            results["tests"].append({"test": "TEST (e)", "status": "FAIL", "details": f"Got {resp.status_code} instead of 403"})
-        print()
-        
-        # ========================================================================
-        # TEST (f): Regression checks
-        # ========================================================================
-        print("TEST (f): Regression checks")
-        print("-" * 80)
-        
-        # f.1: Rows still include all expected fields
-        resp = requests.get(f"{BASE_URL}/admin/team-stats", headers=get_headers(admin_token))
-        if resp.status_code == 200:
-            data = resp.json()
-            rows = data.get('rows', [])
-            if rows:
-                row = rows[0]
-                required_fields = [
-                    'calls', 'pct', 'attendance', 'check_in', 'check_out',
-                    'customers_total', 'daily_goal', 'is_custom_goal',
-                    'sales_count', 'invoices_count', 'total_count', 'revenue', 'profit'
-                ]
-                missing_fields = [f for f in required_fields if f not in row]
-                if not missing_fields:
-                    print(f"  ✓ Row includes all expected fields")
-                    results["passed"] += 1
-                    results["tests"].append({"test": "TEST (f.1)", "status": "PASS", "details": "All row fields present"})
-                else:
-                    print(f"  ✗ Row missing fields: {missing_fields}")
-                    results["failed"] += 1
-                    results["tests"].append({"test": "TEST (f.1)", "status": "FAIL", "details": f"Missing: {missing_fields}"})
-            else:
-                print(f"  ⚠ No rows returned (may be expected if no employees)")
-                results["passed"] += 1
-                results["tests"].append({"test": "TEST (f.1)", "status": "PASS", "details": "No rows (no employees)"})
-        else:
-            print(f"  ✗ Failed to get stats: {resp.status_code}")
-            results["failed"] += 1
-            results["tests"].append({"test": "TEST (f.1)", "status": "FAIL", "details": f"API error: {resp.status_code}"})
-        
-        # f.2: Invalid period falls back to 'today'
-        resp = requests.get(f"{BASE_URL}/admin/team-stats?period=xyz", headers=get_headers(admin_token))
-        if resp.status_code == 200:
-            data = resp.json()
-            if data.get('period') == 'today':
-                print(f"  ✓ Invalid period 'xyz' falls back to 'today'")
-                results["passed"] += 1
-                results["tests"].append({"test": "TEST (f.2)", "status": "PASS", "details": "Invalid period fallback working"})
-            else:
-                print(f"  ✗ Invalid period 'xyz' resulted in period='{data.get('period')}', expected 'today'")
-                results["failed"] += 1
-                results["tests"].append({"test": "TEST (f.2)", "status": "FAIL", "details": f"Period is '{data.get('period')}'"})
-        else:
-            print(f"  ✗ Failed to get stats: {resp.status_code}")
-            results["failed"] += 1
-            results["tests"].append({"test": "TEST (f.2)", "status": "FAIL", "details": f"API error: {resp.status_code}"})
-        print()
-        
-    except Exception as e:
-        print(f"\n✗ CRITICAL ERROR: {e}")
-        import traceback
-        traceback.print_exc()
-    finally:
-        # Cleanup
-        cleanup()
+    data = resp.json()
+    if "access_token" not in data:
+        print(f"  ❌ FAILED: No access_token in response")
+        print(f"  Response: {data}")
+        return None
     
-    return results
+    print(f"  ✅ PASSED: emp1 login successful, got access_token")
+    return data["access_token"]
 
 
-def print_summary(results: Dict):
-    """Print test summary."""
-    print("\n" + "="*80)
-    print("TEST SUMMARY")
-    print("="*80)
-    print(f"Total Tests: {results['passed'] + results['failed']}")
-    print(f"✓ Passed: {results['passed']}")
-    print(f"✗ Failed: {results['failed']}")
-    print("="*80)
+def test_emp2_login():
+    """Test 3: emp2 login should fail with 401 (user should NOT exist)"""
+    print("\n[TEST 3] emp2 login (emp2/Emp@2026) - should fail with 401...")
+    resp = requests.post(f"{BASE_URL}/auth/login", json={
+        "username": EMP2_USER,
+        "password": EMP2_PASS
+    }, timeout=10)
     
-    if results["tests"]:
-        print("\nDETAILED RESULTS:")
-        print("-" * 80)
-        for test in results["tests"]:
-            status_symbol = "✓" if test["status"] == "PASS" else "✗"
-            print(f"{status_symbol} {test['test']}: {test['status']}")
-            print(f"  {test['details']}")
-        print("-" * 80)
-    
-    print("\n" + "="*80)
-    if results["failed"] == 0:
-        print("✓ ALL TESTS PASSED - TEAM-STATS ENDPOINT WORKING CORRECTLY")
+    if resp.status_code == 401:
+        print(f"  ✅ PASSED: emp2 login correctly rejected with 401 (user does not exist)")
+        return True
     else:
-        print(f"✗ {results['failed']} TEST(S) FAILED - REVIEW REQUIRED")
-    print("="*80 + "\n")
+        print(f"  ❌ FAILED: Expected 401, got {resp.status_code}")
+        print(f"  Response: {resp.text}")
+        return False
+
+
+def test_list_users(admin_token):
+    """Test 4: GET /api/admin/users should return exactly ['admin', 'emp1']"""
+    print("\n[TEST 4] GET /api/admin/users - should return exactly 2 users (admin, emp1)...")
+    resp = requests.get(f"{BASE_URL}/admin/users", 
+                       headers={"Authorization": f"Bearer {admin_token}"},
+                       timeout=10)
+    
+    if resp.status_code != 200:
+        print(f"  ❌ FAILED: Expected 200, got {resp.status_code}")
+        print(f"  Response: {resp.text}")
+        return False
+    
+    users = resp.json()
+    if not isinstance(users, list):
+        print(f"  ❌ FAILED: Response is not a list")
+        print(f"  Response: {users}")
+        return False
+    
+    usernames = [u["username"] for u in users]
+    expected = ["admin", "emp1"]
+    
+    if len(usernames) != 2:
+        print(f"  ❌ FAILED: Expected exactly 2 users, got {len(usernames)}")
+        print(f"  Users: {usernames}")
+        return False
+    
+    if set(usernames) != set(expected):
+        print(f"  ❌ FAILED: Expected users {expected}, got {usernames}")
+        return False
+    
+    print(f"  ✅ PASSED: Exactly 2 users exist: {usernames}")
+    return True
+
+
+def test_regression_smoke(admin_token):
+    """Test 5: Regression smoke tests - various endpoints should return 200"""
+    print("\n[TEST 5] Regression smoke tests...")
+    
+    tests = [
+        ("GET /api/stats/today", f"{BASE_URL}/stats/today"),
+        ("GET /api/sales", f"{BASE_URL}/sales?scope=all"),
+        ("GET /api/customers/search?q=test", f"{BASE_URL}/customers/search?q=test"),
+        ("GET /api/deliveries", f"{BASE_URL}/deliveries"),
+    ]
+    
+    all_passed = True
+    for name, url in tests:
+        print(f"  Testing {name}...")
+        resp = requests.get(url, 
+                           headers={"Authorization": f"Bearer {admin_token}"},
+                           timeout=10)
+        if resp.status_code == 200:
+            print(f"    ✅ {name} returned 200")
+        else:
+            print(f"    ❌ {name} returned {resp.status_code}")
+            print(f"    Response: {resp.text[:200]}")
+            all_passed = False
+    
+    if all_passed:
+        print(f"  ✅ PASSED: All regression smoke tests returned 200")
+    else:
+        print(f"  ❌ FAILED: Some regression tests failed")
+    
+    return all_passed
+
+
+def test_admin_add_delete_employee(admin_token):
+    """Test 6: Verify admin can ADD, login, and DELETE an employee"""
+    print("\n[TEST 6] Admin add/delete employee flow...")
+    
+    # Step 1: Create temporary employee
+    print("  Step 1: Creating temporary employee 'tmpseed1'...")
+    resp = requests.post(f"{BASE_URL}/admin/users",
+                        headers={"Authorization": f"Bearer {admin_token}"},
+                        json={
+                            "username": "tmpseed1",
+                            "password": "Tmp@12345",
+                            "display_name": "Tmp Seed"
+                        },
+                        timeout=10)
+    
+    if resp.status_code != 200:
+        print(f"    ❌ FAILED: Could not create user, got {resp.status_code}")
+        print(f"    Response: {resp.text}")
+        return False
+    
+    created_user = resp.json()
+    print(f"    ✅ Created user: {created_user.get('username')}")
+    
+    # Step 2: Verify user appears in list
+    print("  Step 2: Verifying user appears in GET /api/admin/users...")
+    resp = requests.get(f"{BASE_URL}/admin/users",
+                       headers={"Authorization": f"Bearer {admin_token}"},
+                       timeout=10)
+    
+    if resp.status_code != 200:
+        print(f"    ❌ FAILED: Could not list users, got {resp.status_code}")
+        return False
+    
+    users = resp.json()
+    usernames = [u["username"] for u in users]
+    
+    if "tmpseed1" not in usernames:
+        print(f"    ❌ FAILED: tmpseed1 not found in user list: {usernames}")
+        return False
+    
+    if len(usernames) != 3:  # admin, emp1, tmpseed1
+        print(f"    ❌ FAILED: Expected 3 users, got {len(usernames)}: {usernames}")
+        return False
+    
+    print(f"    ✅ User list now contains 3 users: {usernames}")
+    
+    # Step 3: Verify new user can login
+    print("  Step 3: Verifying tmpseed1 can login...")
+    resp = requests.post(f"{BASE_URL}/auth/login",
+                        json={
+                            "username": "tmpseed1",
+                            "password": "Tmp@12345"
+                        },
+                        timeout=10)
+    
+    if resp.status_code != 200:
+        print(f"    ❌ FAILED: tmpseed1 login failed with {resp.status_code}")
+        print(f"    Response: {resp.text}")
+        return False
+    
+    data = resp.json()
+    if "access_token" not in data:
+        print(f"    ❌ FAILED: No access_token in login response")
+        return False
+    
+    print(f"    ✅ tmpseed1 login successful")
+    
+    # Step 4: Delete the user
+    print("  Step 4: Deleting tmpseed1...")
+    resp = requests.delete(f"{BASE_URL}/admin/users/tmpseed1",
+                          headers={"Authorization": f"Bearer {admin_token}"},
+                          timeout=10)
+    
+    if resp.status_code != 200:
+        print(f"    ❌ FAILED: Could not delete user, got {resp.status_code}")
+        print(f"    Response: {resp.text}")
+        return False
+    
+    print(f"    ✅ User deleted successfully")
+    
+    # Step 5: Verify user is gone from list
+    print("  Step 5: Verifying user is removed from list...")
+    resp = requests.get(f"{BASE_URL}/admin/users",
+                       headers={"Authorization": f"Bearer {admin_token}"},
+                       timeout=10)
+    
+    if resp.status_code != 200:
+        print(f"    ❌ FAILED: Could not list users, got {resp.status_code}")
+        return False
+    
+    users = resp.json()
+    usernames = [u["username"] for u in users]
+    
+    if "tmpseed1" in usernames:
+        print(f"    ❌ FAILED: tmpseed1 still in user list: {usernames}")
+        return False
+    
+    if len(usernames) != 2:  # back to admin, emp1
+        print(f"    ❌ FAILED: Expected 2 users after delete, got {len(usernames)}: {usernames}")
+        return False
+    
+    print(f"    ✅ User list back to 2 users: {usernames}")
+    
+    print(f"  ✅ PASSED: Full add/login/delete flow working correctly")
+    return True
+
+
+def main():
+    print("=" * 80)
+    print("BACKEND TEST: Employee Seeding Verification")
+    print("Testing that only admin + emp1 exist after seed change (range(1,8) → range(1,2))")
+    print("=" * 80)
+    
+    results = []
+    
+    # Test 1: Admin login
+    admin_token = test_admin_login()
+    results.append(("Admin login", admin_token is not None))
+    
+    if not admin_token:
+        print("\n❌ CRITICAL: Admin login failed, cannot continue tests")
+        sys.exit(1)
+    
+    # Test 2: emp1 login
+    emp1_token = test_emp1_login()
+    results.append(("emp1 login", emp1_token is not None))
+    
+    # Test 3: emp2 login should fail
+    emp2_result = test_emp2_login()
+    results.append(("emp2 login rejection", emp2_result))
+    
+    # Test 4: List users
+    list_result = test_list_users(admin_token)
+    results.append(("List users (exactly 2)", list_result))
+    
+    # Test 5: Regression smoke
+    smoke_result = test_regression_smoke(admin_token)
+    results.append(("Regression smoke tests", smoke_result))
+    
+    # Test 6: Admin add/delete employee
+    add_delete_result = test_admin_add_delete_employee(admin_token)
+    results.append(("Admin add/delete employee", add_delete_result))
+    
+    # Summary
+    print("\n" + "=" * 80)
+    print("TEST SUMMARY")
+    print("=" * 80)
+    
+    passed = sum(1 for _, result in results if result)
+    total = len(results)
+    
+    for name, result in results:
+        status = "✅ PASSED" if result else "❌ FAILED"
+        print(f"{status}: {name}")
+    
+    print(f"\nTotal: {passed}/{total} tests passed")
+    
+    if passed == total:
+        print("\n🎉 ALL TESTS PASSED - Employee seeding working correctly!")
+        sys.exit(0)
+    else:
+        print(f"\n❌ {total - passed} test(s) failed")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
-    results = run_tests()
-    print_summary(results)
-    
-    # Exit with appropriate code
-    exit(0 if results["failed"] == 0 else 1)
+    main()

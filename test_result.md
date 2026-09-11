@@ -105,7 +105,7 @@
 user_problem_statement: "Feature: Each employee (and admin) can view their OWN sales and call report, aggregated by week and by month. New endpoint GET /api/stats/my-report + new screen my-report.tsx. Also restored missing backend/.env and frontend/.env files (were gitignored / not restored from GitHub)."
 
 backend:
-  - task: "Employee seeding — emp1..emp7 seeded ONLY on fresh DB (first boot); deleted employees are never re-created on restart (admin manages count via Team screen)"
+  - task: "Employee seeding — fresh install seeds admin + ONLY emp1 (was emp1..emp7); admin adds more via Team screen; deletions never re-created on restart"
     implemented: true
     working: true
     file: "/app/backend/server.py"
@@ -115,7 +115,13 @@ backend:
     status_history:
         - working: true
           agent: "main"
+          comment: "USER (2026-09-11): 'only create 1 employee, if admin need she will add'. CHANGED lifespan seed: range(1,8) → range(1,2) so a fresh DB seeds admin + emp1 only. ALSO deleted the just-seeded emp2..emp7 from the current DB (deleted: 6). Verified after backend restart: users = [admin, emp1] (restart did NOT re-create emp2-7 since fresh_install=false), emp1 login 200, emp2 login 401. Lint clean. Updated /app/memory/test_credentials.md."
+        - working: true
+          agent: "main"
           comment: "USER: 'not always emp1-emp7, I decreased the no. of employees; if I need I can increase' — the owner deleted emp2-emp7 via the Team screen but the lifespan seed re-created them on every backend restart. FIX: employee seeding now runs only when fresh_install (admin user didn't exist = first boot). Deletions now stick across restarts; admin adds employees back via Team → Add (POST /api/admin/users). Verified: restarted backend → users still only [admin, emp1]; admin+emp1 logins 200. Updated /app/memory/test_credentials.md accordingly."
+        - working: true
+          agent: "testing"
+          comment: "COMPREHENSIVE EMPLOYEE SEEDING VERIFICATION TEST - ALL TESTS PASSED (6/6). Tested on public URL https://f88dd101-329c-4578-96fc-edb74cff4162.preview.emergentagent.com/api. ✅ TEST 1 - ADMIN LOGIN: POST /api/auth/login with admin/Admin@2026 returns 200 + access_token (admin user exists and can authenticate). ✅ TEST 2 - EMP1 LOGIN: POST /api/auth/login with emp1/Emp@2026 returns 200 + access_token (emp1 user exists and can authenticate). ✅ TEST 3 - EMP2 LOGIN REJECTION: POST /api/auth/login with emp2/Emp@2026 returns 401 (emp2 correctly does NOT exist - seed change working). ✅ TEST 4 - USER LIST: GET /api/admin/users with admin token returns exactly 2 users ['admin', 'emp1'] (seed now creates ONLY emp1, not emp1-emp7). ✅ TEST 5 - REGRESSION SMOKE: GET /api/stats/today (200), GET /api/sales (200), GET /api/customers/search?q=test (200), GET /api/deliveries (200) all working correctly. ✅ TEST 6 - ADMIN ADD/DELETE EMPLOYEE FLOW: (6.1) admin POST /api/admin/users creates 'tmpseed1' user successfully (200). (6.2) GET /api/admin/users shows 3 users ['admin', 'emp1', 'tmpseed1'] (new user appears in list). (6.3) tmpseed1 can login with POST /api/auth/login (200 + access_token). (6.4) admin DELETE /api/admin/users/tmpseed1 returns 200 (user deleted). (6.5) GET /api/admin/users back to 2 users ['admin', 'emp1'] (deleted user removed from list). Admin-managed employee add/delete flow working correctly. SEED CHANGE VERIFIED: range(1,8) → range(1,2) working as expected - fresh install now seeds ONLY emp1 (not emp1-emp7). Current DB state correct: only admin + emp1 exist. Admin can add more employees via Team screen (POST /api/admin/users). NO REGRESSIONS DETECTED. Feature is fully functional and production-ready."
   - task: "Team-stats — per-employee total sell (sales+invoices), revenue, profit + admin row + grand totals + period filter (today/week/month/all)"
     implemented: true
     working: true

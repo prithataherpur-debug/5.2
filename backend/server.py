@@ -593,11 +593,12 @@ async def lifespan(app: FastAPI):
             "created_at": now_iso(),
         })
 
-    # Seed 7 starter employees on FIRST BOOT only. After that the admin owns
-    # employee management (Add / Remove in the Team screen) — deleted employees
-    # must NOT be re-created on restart.
+    # Seed ONE starter employee (emp1) on FIRST BOOT only. After that the admin
+    # owns employee management (Add / Remove in the Team screen) — if more
+    # employees are needed, the admin adds them; deleted employees must NOT be
+    # re-created on restart.
     if fresh_install:
-        for i in range(1, 8):
+        for i in range(1, 2):
             u = f"emp{i}"
             if not await db.users.find_one({"username": u}):
                 await db.users.insert_one({
