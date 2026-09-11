@@ -101,6 +101,22 @@ export default function MyReportScreen() {
             </View>
           </View>
 
+          {/* Overdue / outstanding across all your customers (all-time running balance) */}
+          {data?.overdue && (data.overdue.total > 0 || data.overdue.customer_count > 0) ? (
+            <View style={styles.overdueCard} testID="my-report-overdue">
+              <View style={styles.overdueIcon}>
+                <Ionicons name="alert-circle" size={22} color="#fff" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.overdueLabel}>OVERDUE FROM YOUR CUSTOMERS</Text>
+                <Text style={styles.overdueValue}>{fmtMoney(data.overdue.total)}</Text>
+                <Text style={styles.overdueSub}>
+                  across {data.overdue.customer_count} customer{data.overdue.customer_count === 1 ? "" : "s"} · unpaid sales &amp; invoices
+                </Text>
+              </View>
+            </View>
+          ) : null}
+
           {rows.length === 0 ? (
             <View style={styles.center}>
               <Ionicons name="bar-chart-outline" size={56} color={theme.color.borderStrong} />
@@ -214,6 +230,20 @@ const styles = StyleSheet.create({
   },
   summaryLabel: { color: theme.color.borderStrong, fontSize: 11, fontWeight: "700", letterSpacing: 1.5 },
   summaryRow: { flexDirection: "row", flexWrap: "wrap", gap: theme.space.md, rowGap: theme.space.lg, marginTop: theme.space.md },
+
+  overdueCard: {
+    flexDirection: "row", alignItems: "center", gap: theme.space.md,
+    backgroundColor: "#FDECEA", borderRadius: theme.radius.lg,
+    borderWidth: 1, borderColor: theme.color.error + "55",
+    padding: theme.space.lg, marginBottom: theme.space.lg,
+  },
+  overdueIcon: {
+    width: 44, height: 44, borderRadius: 22, alignItems: "center", justifyContent: "center",
+    backgroundColor: theme.color.error,
+  },
+  overdueLabel: { color: theme.color.error, fontSize: 10, fontWeight: "800", letterSpacing: 1 },
+  overdueValue: { color: theme.color.error, fontSize: 24, fontWeight: "900", marginTop: 2, letterSpacing: -0.5 },
+  overdueSub: { color: theme.color.error, fontSize: 12, fontWeight: "600", marginTop: 2, opacity: 0.85 },
   summaryStat: { minWidth: "26%", flexGrow: 1, alignItems: "flex-start" },
   summaryValue: { color: "#fff", fontSize: 22, fontWeight: "900", marginTop: 6, letterSpacing: -0.5 },
   summaryStatLabel: { color: theme.color.borderStrong, fontSize: 11, fontWeight: "700", marginTop: 2 },

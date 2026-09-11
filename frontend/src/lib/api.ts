@@ -373,6 +373,9 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(patch),
     }),
+  // Self-service profile update for the logged-in user (works for employees too).
+  updateMe: (patch: { display_name?: string; password?: string; new_username?: string }) =>
+    req<User>(`/auth/me`, { method: "PATCH", body: JSON.stringify(patch) }),
   teamStats: (period?: "today" | "week" | "month" | "all") =>
     req<{
       date: string;
@@ -395,6 +398,8 @@ export const api = {
         check_in?: string | null;
         check_out?: string | null;
         customers_total: number;
+        overdue_total: number;
+        overdue_customers: number;
       }[];
       admin: {
         username: string;
@@ -404,6 +409,8 @@ export const api = {
         total_count: number;
         revenue: number;
         profit: number;
+        overdue_total: number;
+        overdue_customers: number;
       };
       totals: {
         sales_count: number;
@@ -411,6 +418,8 @@ export const api = {
         total_count: number;
         revenue: number;
         profit: number;
+        overdue_total: number;
+        overdue_customers: number;
       };
     }>(`/admin/team-stats${period ? `?period=${period}` : ""}`),
   reassign: (customer_ids: string[], new_owner: string) =>
@@ -792,6 +801,8 @@ export type ReportBucket = {
 export type MyReport = {
   username: string;
   display_name: string;
+  is_admin?: boolean;
+  overdue?: { total: number; customer_count: number };
   weekly: ReportBucket[];
   monthly: ReportBucket[];
 };

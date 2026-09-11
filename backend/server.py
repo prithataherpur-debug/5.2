@@ -227,6 +227,13 @@ class AdminUserCreate(BaseModel):
     daily_goal: Optional[int] = None
 
 
+class SelfUpdateBody(BaseModel):
+    """Self-service profile update for the logged-in user (any role)."""
+    display_name: Optional[str] = None
+    password: Optional[str] = None
+    new_username: Optional[str] = None
+
+
 class ReassignItemsBody(BaseModel):
     ids: List[str]
     new_owner: str
@@ -781,6 +788,51 @@ async def login(body: LoginBody):
 async def me(u=Depends(current_user)):
     return user_public(u).dict()
 
+
+@api_router.patch("/auth/me", response_model=UserOut)
+async def update_me(body: SelfUpdateBody, u=Depends(current_user)):
+    """Let the logged-in user update their OWN display name, login id and password.
+    Available to every role (employees included) — scoped strictly to self."""
+    username = u["username"]
+    updates: dict = {}
+    if body.display_name is not None:
+        name = body.display_name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="Display name cannot be empty")
+        if len(name) > 60:
+            raise HTTPException(status_code=400, detail="Display name too long")
+        updates["display_name"] = name
+    if body.password is not None:
+        pw = body.password.strip()
+        if len(pw) < 4:
+            raise HTTPException(status_code=400, detail="Password must be at least 4 characters")
+        updates["password_hash"] = hash_pw(pw)
+
+    new_username_final: Optional[str] = None
+    if body.new_username is not None:
+        new_u = body.new_username.strip().lower()
+        if new_u != username:
+            if not USERNAME_RE.match(new_u):
+                raise HTTPException(status_code=400, detail="Username must be 3-30 chars: letters, digits, _.-")
+            if await db.users.find_one({"username": new_u}, {"_id": 0}):
+                raise HTTPException(status_code=409, detail="Username already taken")
+            new_username_final = new_u
+
+    if not updates and not new_username_final:
+        raise HTTPException(status_code=400, detail="No changes provided")
+
+    if updates:
+        await db.users.update_one({"username": username}, {"$set": updates})
+
+    final_username = username
+    if new_username_final:
+        await cascade_rename_user(username, new_username_final)
+        final_username = new_username_final
+
+    updated = await db.users.find_one({"username": final_username}, {"_id": 0})
+    return user_public(updated)
+
+
 @api_router.get("/admin/users", response_model=List[UserOut])
 async def list_users(_=Depends(admin_only)):
     users = await db.users.find({}, {"_id": 0}).sort("username", 1).to_list(50)
@@ -932,6 +984,63 @@ async def admin_delete_user(
     return {"deleted": username, "customers_moved": moved, "reassigned_to": reassign_to if has_customers else None}
 
 
+async def _overdue_by_user(usernames: Optional[List[str]] = None) -> dict:
+    """Outstanding (overdue) amounts grouped by the employee who created the entry.
+
+    Definition (consistent with the customer ledger): a sale (source != 'invoice')
+    or an invoice that has NO money receipt linked to it is treated as overdue /
+    unpaid. Returns {username: {"total": float, "customers": set(customer keys)}}.
+    This is an all-time running balance (not period-filtered).
+    """
+    q_sales: dict = {"source": {"$ne": "invoice"}}
+    q_inv: dict = {}
+    if usernames is not None:
+        q_sales["user"] = {"$in": usernames}
+        q_inv["user"] = {"$in": usernames}
+    sales = await db.sales.find(
+        q_sales,
+        {"_id": 0, "id": 1, "user": 1, "amount": 1, "customer_id": 1, "customer_name": 1},
+    ).to_list(100000)
+    invoices = await db.invoices.find(
+        q_inv,
+        {"_id": 0, "id": 1, "user": 1, "total": 1, "customer_id": 1, "customer_name": 1, "customer_mobile": 1},
+    ).to_list(100000)
+
+    all_ids = [s["id"] for s in sales] + [iv["id"] for iv in invoices]
+    receipted: set = set()
+    if all_ids:
+        rc = await db.receipts.find(
+            {"source_id": {"$in": all_ids}}, {"_id": 0, "source_id": 1},
+        ).to_list(100000)
+        receipted = {r.get("source_id") for r in rc if r.get("source_id")}
+
+    def _cust_key(d: dict) -> str:
+        return (
+            d.get("customer_id")
+            or (d.get("customer_name") or "").strip().lower()
+            or (d.get("customer_mobile") or "")
+        )
+
+    result: dict = {}
+    for s in sales:
+        if s["id"] in receipted:
+            continue
+        entry = result.setdefault(s["user"], {"total": 0.0, "customers": set()})
+        entry["total"] += float(s.get("amount") or 0)
+        ck = _cust_key(s)
+        if ck:
+            entry["customers"].add(ck)
+    for iv in invoices:
+        if iv["id"] in receipted:
+            continue
+        entry = result.setdefault(iv["user"], {"total": 0.0, "customers": set()})
+        entry["total"] += float(iv.get("total") or 0)
+        ck = _cust_key(iv)
+        if ck:
+            entry["customers"].add(ck)
+    return result
+
+
 @api_router.get("/admin/team-stats")
 async def admin_team_stats(period: str = "today", u=Depends(admin_only)):
     """Per-employee performance snapshot.
@@ -1020,6 +1129,15 @@ async def admin_team_stats(period: str = "today", u=Depends(admin_only)):
     ]).to_list(200)
     cust_map = {row["_id"]: row["count"] for row in cust_agg}
 
+    # Overdue / unpaid outstanding per user (all-time running balance, not period-filtered)
+    overdue_map = await _overdue_by_user()
+
+    def overdue_for(uname: str) -> dict:
+        e = overdue_map.get(uname)
+        if not e:
+            return {"overdue_total": 0.0, "overdue_customers": 0}
+        return {"overdue_total": round(float(e["total"]), 2), "overdue_customers": len(e["customers"])}
+
     def combo(uname: str) -> dict:
         """Combined sales+invoices numbers for one user over the period."""
         s = sales_map.get(uname, {})
@@ -1066,29 +1184,39 @@ async def admin_team_stats(period: str = "today", u=Depends(admin_only)):
             "check_in": att.get("check_in") if att else None,
             "check_out": att.get("check_out") if att else None,
             "customers_total": cust_map.get(uname, 0),
+            **overdue_for(uname),
         })
 
     # Admin's own numbers (all admin accounts combined)
-    admin_combo = {"sales_count": 0, "invoices_count": 0, "total_count": 0, "revenue": 0.0, "profit": 0.0}
+    admin_combo = {"sales_count": 0, "invoices_count": 0, "total_count": 0, "revenue": 0.0, "profit": 0.0,
+                   "overdue_total": 0.0, "overdue_customers": 0}
     for a in admins:
         ca = combo(a["username"])
         for k in ("sales_count", "invoices_count", "total_count"):
             admin_combo[k] += ca[k]
         admin_combo["revenue"] = round(admin_combo["revenue"] + ca["revenue"], 2)
         admin_combo["profit"] = round(admin_combo["profit"] + ca["profit"], 2)
+        ao = overdue_for(a["username"])
+        admin_combo["overdue_total"] = round(admin_combo["overdue_total"] + ao["overdue_total"], 2)
+        admin_combo["overdue_customers"] += ao["overdue_customers"]
     admin_label = admins[0].get("display_name") or admins[0]["username"] if admins else "Admin"
 
     # Grand totals: every employee + admin combined
-    totals = {"sales_count": 0, "invoices_count": 0, "total_count": 0, "revenue": 0.0, "profit": 0.0}
+    totals = {"sales_count": 0, "invoices_count": 0, "total_count": 0, "revenue": 0.0, "profit": 0.0,
+              "overdue_total": 0.0, "overdue_customers": 0}
     for r in rows:
         for k in ("sales_count", "invoices_count", "total_count"):
             totals[k] += r[k]
         totals["revenue"] = round(totals["revenue"] + r["revenue"], 2)
         totals["profit"] = round(totals["profit"] + r["profit"], 2)
+        totals["overdue_total"] = round(totals["overdue_total"] + r["overdue_total"], 2)
+        totals["overdue_customers"] += r["overdue_customers"]
     for k in ("sales_count", "invoices_count", "total_count"):
         totals[k] += admin_combo[k]
     totals["revenue"] = round(totals["revenue"] + admin_combo["revenue"], 2)
     totals["profit"] = round(totals["profit"] + admin_combo["profit"], 2)
+    totals["overdue_total"] = round(totals["overdue_total"] + admin_combo["overdue_total"], 2)
+    totals["overdue_customers"] += admin_combo["overdue_customers"]
 
     return {
         "date": day,
@@ -1918,10 +2046,21 @@ async def stats_my_report(u=Depends(current_user), weeks: int = 8, months: int =
         for b in monthly:
             b.pop("profit", None)
 
+    # Outstanding / overdue across ALL of this user's customers (all-time running
+    # balance): sum of the user's unpaid sales + invoices, and how many distinct
+    # customers still owe. Shown at the top of the user's own sale report.
+    od_map = await _overdue_by_user([username])
+    od = od_map.get(username, {"total": 0.0, "customers": set()})
+    overdue = {
+        "total": round(float(od["total"]), 2),
+        "customer_count": len(od["customers"]),
+    }
+
     return {
         "username": username,
         "display_name": u.get("display_name", username),
         "is_admin": is_admin,
+        "overdue": overdue,
         "weekly": weekly,
         "monthly": monthly,
     }

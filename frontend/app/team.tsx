@@ -29,6 +29,8 @@ type TeamRow = {
   check_in?: string | null;
   check_out?: string | null;
   customers_total: number;
+  overdue_total: number;
+  overdue_customers: number;
 };
 
 type SalesCombo = {
@@ -37,6 +39,8 @@ type SalesCombo = {
   total_count: number;
   revenue: number;
   profit: number;
+  overdue_total: number;
+  overdue_customers: number;
 };
 
 type PeriodKey = "today" | "week" | "month" | "all";
@@ -69,7 +73,7 @@ export default function TeamScreen() {
   const [defaultGoal, setDefaultGoal] = useState(50);
   const [period, setPeriod] = useState<PeriodKey>("today");
   const [adminStats, setAdminStats] = useState<(SalesCombo & { username: string; display_name: string }) | null>(null);
-  const [grand, setGrand] = useState<SalesCombo>({ sales_count: 0, invoices_count: 0, total_count: 0, revenue: 0, profit: 0 });
+  const [grand, setGrand] = useState<SalesCombo>({ sales_count: 0, invoices_count: 0, total_count: 0, revenue: 0, profit: 0, overdue_total: 0, overdue_customers: 0 });
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [edit, setEdit] = useState<TeamRow | null>(null);
@@ -178,6 +182,15 @@ export default function TeamScreen() {
                   <SummaryPill label="Total revenue" value={`₹${grand.revenue.toLocaleString()}`} icon="trending-up-outline" wide />
                   <SummaryPill label="Total profit" value={`₹${grand.profit.toLocaleString()}`} icon="wallet-outline" />
                 </View>
+                <View style={styles.summaryRow}>
+                  <SummaryPill
+                    label="Total overdue"
+                    value={`₹${(grand.overdue_total || 0).toLocaleString()}`}
+                    sub={`${grand.overdue_customers || 0} customer${(grand.overdue_customers || 0) === 1 ? "" : "s"} unpaid`}
+                    icon="alert-circle-outline"
+                    wide
+                  />
+                </View>
               </View>
 
               {adminStats ? (
@@ -192,6 +205,9 @@ export default function TeamScreen() {
                   <View style={{ alignItems: "flex-end" }}>
                     <Text style={styles.adminSell}>{adminStats.total_count} sell</Text>
                     <Text style={styles.adminRev}>₹{adminStats.revenue.toLocaleString()} · +₹{adminStats.profit.toLocaleString()}</Text>
+                    {(adminStats.overdue_total || 0) > 0 ? (
+                      <Text style={styles.overdueTag}>₹{adminStats.overdue_total.toLocaleString()} overdue · {adminStats.overdue_customers} cust</Text>
+                    ) : null}
                   </View>
                 </View>
               ) : null}
@@ -257,6 +273,15 @@ export default function TeamScreen() {
                   />
                 </View>
                 <Text style={styles.sellSplit}>{item.sales_count} sales · {item.invoices_count} invoices</Text>
+
+                {(item.overdue_total || 0) > 0 ? (
+                  <View style={styles.overdueRow} testID={`team-overdue-${item.username}`}>
+                    <Ionicons name="alert-circle" size={13} color={theme.color.error} />
+                    <Text style={styles.overdueRowText}>
+                      ₹{item.overdue_total.toLocaleString()} overdue · {item.overdue_customers} customer{item.overdue_customers === 1 ? "" : "s"}
+                    </Text>
+                  </View>
+                ) : null}
 
                 <View style={styles.progressTrack}>
                   <View
@@ -860,6 +885,14 @@ const styles = StyleSheet.create({
   },
   adminSell: { fontSize: 14, fontWeight: "800", color: theme.color.onSurface },
   adminRev: { fontSize: 11, fontWeight: "700", color: theme.color.muted, marginTop: 2 },
+  overdueTag: { fontSize: 10, fontWeight: "800", color: theme.color.error, marginTop: 2 },
+  overdueRow: {
+    flexDirection: "row", alignItems: "center", gap: 5,
+    marginTop: 6, alignSelf: "center",
+    backgroundColor: "#FDECEA", paddingHorizontal: 10, paddingVertical: 4,
+    borderRadius: theme.radius.pill,
+  },
+  overdueRowText: { fontSize: 11, fontWeight: "800", color: theme.color.error },
   sellSplit: { fontSize: 11, color: theme.color.muted, marginTop: 6, textAlign: "center" },
   pillSub: { fontSize: 10, color: theme.color.muted, marginTop: 1 },
   summaryRow: { flexDirection: "row", gap: theme.space.sm },

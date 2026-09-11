@@ -54,7 +54,7 @@ export default function AccountScreen() {
     setBusy(true);
     setErr("");
     try {
-      await api.updateUser(user.username, patch);
+      await api.updateMe(patch);
       const needsSignOut = Boolean(patch.new_username || patch.password);
       if (needsSignOut) {
         setToast("Credentials updated — signing out…");
