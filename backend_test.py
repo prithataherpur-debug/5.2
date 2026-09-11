@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
 # Base URL - using the PUBLIC URL
-BASE_URL = "https://9b51b322-3346-499e-955f-b2208d0bab61.preview.emergentagent.com/api"
+BASE_URL = "https://project-open-10.preview.emergentagent.com/api"
 
 # Credentials
 ADMIN_CREDS = {"username": "admin", "password": "Admin@2026"}
