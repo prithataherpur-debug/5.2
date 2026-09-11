@@ -281,6 +281,7 @@ class Sale(BaseModel):
     payment_mode: str = "cash"  # cash | online | mixed | finance
     da_amount: Optional[float] = None  # finance: Disbursement Amount (finance co. → bank a/c)
     dp_amount: Optional[float] = None  # finance: Down Payment (= cash_amount + online_amount)
+    extra_finance: Optional[float] = None  # finance: excess (DP+DA) over the product value
     purchase_amount: Optional[float] = None
     profit: float = 0.0
     currency: str
@@ -346,6 +347,7 @@ class Invoice(BaseModel):
     payment_mode: str = "cash"  # cash | online | mixed | finance
     da_amount: Optional[float] = None  # finance: Disbursement Amount (finance co. → bank a/c)
     dp_amount: Optional[float] = None  # finance: Down Payment (= cash_amount + online_amount)
+    extra_finance: Optional[float] = None  # finance: excess (DP+DA) over (total - advance)
     notes: str = ""
     sale_id: Optional[str] = None
     pdf_path: Optional[str] = None
@@ -368,9 +370,10 @@ class ReceiptCreateBody(BaseModel):
     customer_mobile: str = ""
     customer_address: Optional[str] = ""
     amount: float
-    payment_mode: str = "cash"  # cash | online | mixed
+    payment_mode: str = "cash"  # cash | online | mixed | finance
     cash_amount: Optional[float] = None
     online_amount: Optional[float] = None
+    da_amount: Optional[float] = None  # FINANCE: Disbursement Amount (bank); receipt total = DP (cash+online) + DA
     source_type: str = "other"  # sale | invoice | collection | other
     source_id: Optional[str] = None
     reference_no: Optional[str] = None  # explicit override; auto-filled from source if omitted
@@ -402,6 +405,9 @@ class MoneyReceipt(BaseModel):
     payment_mode: str
     cash_amount: float = 0.0
     online_amount: float = 0.0
+    da_amount: Optional[float] = None  # finance: Disbursement Amount (finance co. → bank a/c)
+    dp_amount: Optional[float] = None  # finance: Down Payment (= cash_amount + online_amount)
+    extra_finance: Optional[float] = None  # finance: excess over product value (receipts: always 0)
     source_type: str
     source_id: Optional[str] = None
     source_label: Optional[str] = None
@@ -480,6 +486,7 @@ class CollectionEntryBody(BaseModel):
     date_key: Optional[str] = None
     cash_total: float = 0  # direct cash amount (no denomination breakdown)
     online_total: float = 0
+    da_total: float = 0  # finance disbursements received in bank a/c (DA)
     notes: Optional[str] = ""
 
 
@@ -491,6 +498,7 @@ class CollectionEntry(BaseModel):
     denominations: dict = Field(default_factory=dict)  # kept for legacy records; new entries leave empty
     cash_total: float
     online_total: float
+    da_total: float = 0.0  # bank / finance (DA)
     grand_total: float
     notes: str = ""
     created_at: str
@@ -612,9 +620,12 @@ async def lifespan(app: FastAPI):
 
     # backfill phone_norm on existing customers
     async for c in db.customers.find({"phone_norm": {"$exists": False}}, {"_id": 0, "id": 1, "phone": 1}):
+        pn = norm_phone(c.get("phone", ""))
+        if not pn:
+            continue  # empty phone → leave phone_norm unset (sparse index skips it)
         await db.customers.update_one(
             {"id": c["id"]},
-            {"$set": {"phone_norm": norm_phone(c.get("phone", ""))}}
+            {"$set": {"phone_norm": pn}}
         )
     # backfill assigned_to for legacy customers → round-robin across employees
     emps = [u["username"] async for u in db.users.find({"role": "employee"}, {"_id": 0, "username": 1}).sort("username", 1)]
@@ -2058,7 +2069,8 @@ async def create_collection(body: CollectionEntryBody, u=Depends(current_user)):
     date_key = (body.date_key or today_key()).strip()
     cash_total = float(max(0.0, body.cash_total or 0))
     online_total = float(max(0.0, body.online_total or 0))
-    grand = cash_total + online_total
+    da_total = float(max(0.0, body.da_total or 0))
+    grand = cash_total + online_total + da_total
     now = now_iso()
     doc = {
         "id": str(uuid.uuid4()),
@@ -2067,6 +2079,7 @@ async def create_collection(body: CollectionEntryBody, u=Depends(current_user)):
         "denominations": {},  # not used for new collections
         "cash_total": cash_total,
         "online_total": online_total,
+        "da_total": da_total,
         "grand_total": grand,
         "notes": (body.notes or "").strip(),
         "created_at": now,
@@ -2147,6 +2160,8 @@ async def update_collection(cid: str, body: CollectionEntryBody, u=Depends(curre
         upd["denominations"] = {}  # clear legacy denoms when editing to direct amount
     if body.online_total is not None:
         upd["online_total"] = float(max(0.0, body.online_total))
+    if body.da_total is not None:
+        upd["da_total"] = float(max(0.0, body.da_total))
     if body.notes is not None:
         upd["notes"] = body.notes.strip()
     if not upd:
@@ -2154,7 +2169,8 @@ async def update_collection(cid: str, body: CollectionEntryBody, u=Depends(curre
     # recalc grand
     cash = upd.get("cash_total", doc.get("cash_total", 0))
     online = upd.get("online_total", doc.get("online_total", 0))
-    upd["grand_total"] = float(cash) + float(online)
+    da = upd.get("da_total", doc.get("da_total", 0))
+    upd["grand_total"] = float(cash) + float(online) + float(da)
     upd["updated_at"] = now_iso()
     await db.collections.update_one({"id": cid}, {"$set": upd})
     fresh = await db.collections.find_one({"id": cid}, {"_id": 0})
@@ -2179,22 +2195,24 @@ async def collections_summary(days: int = 7, u=Depends(current_user)):
     start = (today - timedelta(days=days - 1)).isoformat()
     q: dict = {"date_key": {"$gte": start}}
     docs = await db.collections.find(
-        q, {"_id": 0, "date_key": 1, "cash_total": 1, "online_total": 1, "grand_total": 1},
+        q, {"_id": 0, "date_key": 1, "cash_total": 1, "online_total": 1, "da_total": 1, "grand_total": 1},
     ).to_list(1000)
     by_day: dict = {}
     for d in docs:
-        by_day.setdefault(d["date_key"], {"cash": 0.0, "online": 0.0, "total": 0.0})
+        by_day.setdefault(d["date_key"], {"cash": 0.0, "online": 0.0, "bank": 0.0, "total": 0.0})
         by_day[d["date_key"]]["cash"] += float(d.get("cash_total", 0))
         by_day[d["date_key"]]["online"] += float(d.get("online_total", 0))
+        by_day[d["date_key"]]["bank"] += float(d.get("da_total", 0))
         by_day[d["date_key"]]["total"] += float(d.get("grand_total", 0))
     days_list = []
     for i in range(days):
         d = (today - timedelta(days=days - 1 - i)).isoformat()
-        agg = by_day.get(d, {"cash": 0.0, "online": 0.0, "total": 0.0})
+        agg = by_day.get(d, {"cash": 0.0, "online": 0.0, "bank": 0.0, "total": 0.0})
         days_list.append({"date": d, **agg})
     totals = {
         "cash": sum(x["cash"] for x in days_list),
         "online": sum(x["online"] for x in days_list),
+        "bank": sum(x["bank"] for x in days_list),
         "total": sum(x["total"] for x in days_list),
     }
     return {"days": days_list, "totals": totals}
@@ -2351,6 +2369,7 @@ async def _build_daybook(day: str) -> dict:
     receipts_by_src: dict = {}
     rc_cash = 0.0
     rc_online = 0.0
+    rc_bank = 0.0
     for r in rc_docs:
         # attach display + pdf token
         r["display_name"] = await _name(r["user"])
@@ -2359,6 +2378,7 @@ async def _build_daybook(day: str) -> dict:
         # totals split — prefer explicit cash/online fields
         amt = float(r.get("amount") or 0)
         mode = (r.get("payment_mode") or "cash").lower()
+        da_amt = float(r.get("da_amount") or 0)
         c_amt = r.get("cash_amount")
         o_amt = r.get("online_amount")
         if c_amt is None or o_amt is None:
@@ -2371,6 +2391,7 @@ async def _build_daybook(day: str) -> dict:
                 c_amt, o_amt = amt, 0.0
         rc_cash += float(c_amt or 0)
         rc_online += float(o_amt or 0)
+        rc_bank += da_amt
         sid = r.get("source_id")
         if sid:
             receipts_by_src.setdefault(sid, []).append({
@@ -2380,6 +2401,7 @@ async def _build_daybook(day: str) -> dict:
                 "payment_mode": mode,
                 "cash_amount": float(c_amt or 0),
                 "online_amount": float(o_amt or 0),
+                "da_amount": da_amt,
                 "reference_no": r.get("reference_no") or "",
                 "source_type": (r.get("source_type") or "other").lower(),
                 "pdf_token": r.get("pdf_token"),
@@ -2411,17 +2433,19 @@ async def _build_daybook(day: str) -> dict:
         return {
             "cash": float(sum(d.get("cash_total", 0) for d in docs)),
             "online": float(sum(d.get("online_total", 0) for d in docs)),
+            "bank": float(sum(d.get("da_total", 0) for d in docs)),
             "total": float(sum(d.get("grand_total", 0) for d in docs)),
         }
 
     col_totals = _totals(col_docs)
     ds_totals = _totals(ds_docs)
-    rc_totals = {"cash": rc_cash, "online": rc_online, "total": rc_cash + rc_online}
+    rc_totals = {"cash": rc_cash, "online": rc_online, "bank": rc_bank, "total": rc_cash + rc_online + rc_bank}
 
     # Invoices for the day (with cash/online split from invoice payment)
     inv_total = 0.0
     inv_cash = 0.0
     inv_online = 0.0
+    inv_bank = 0.0
     # Build receipt lookup by invoice_id for duplicate detection
     inv_receipts_by_src: dict = {}
     for r in rc_docs:
@@ -2442,6 +2466,7 @@ async def _build_daybook(day: str) -> dict:
                 "payment_mode": r_mode,
                 "cash_amount": float(rc_c or 0),
                 "online_amount": float(rc_o or 0),
+                "da_amount": float(r.get("da_amount") or 0),
                 "reference_no": r.get("reference_no") or "",
                 "source_type": "invoice",
                 "pdf_token": r.get("pdf_token"),
@@ -2460,13 +2485,15 @@ async def _build_daybook(day: str) -> dict:
             for r in linked:
                 inv_cash += float(r.get("cash_amount") or 0)
                 inv_online += float(r.get("online_amount") or 0)
-    inv_total = inv_cash + inv_online
-    inv_totals = {"cash": inv_cash, "online": inv_online, "total": inv_total}
+                inv_bank += float(r.get("da_amount") or 0)
+    inv_total = inv_cash + inv_online + inv_bank
+    inv_totals = {"cash": inv_cash, "online": inv_online, "bank": inv_bank, "total": inv_total}
 
     # Manual sales for the day — money counted = what was actually collected via the
     # money receipts raised against each sale (cash + online split from the receipts).
     sale_cash = 0.0
     sale_online = 0.0
+    sale_bank = 0.0
     for s in sale_docs:
         linked = receipts_by_src.get(s["id"], [])
         s["linked_receipts"] = linked
@@ -2477,7 +2504,8 @@ async def _build_daybook(day: str) -> dict:
             for r in linked:
                 sale_cash += float(r.get("cash_amount") or 0)
                 sale_online += float(r.get("online_amount") or 0)
-    sale_totals = {"cash": sale_cash, "online": sale_online, "total": sale_cash + sale_online}
+                sale_bank += float(r.get("da_amount") or 0)
+    sale_totals = {"cash": sale_cash, "online": sale_online, "bank": sale_bank, "total": sale_cash + sale_online + sale_bank}
 
     # Standalone receipts = fresh money not already counted through a source listed on THIS day.
     #   - source_type='other' (advance / ad-hoc)
@@ -2485,6 +2513,7 @@ async def _build_daybook(day: str) -> dict:
     counted_ids = {d["id"] for d in col_docs} | {iv["id"] for iv in inv_docs} | {s["id"] for s in sale_docs}
     other_rc_cash = 0.0
     other_rc_online = 0.0
+    other_rc_bank = 0.0
     for r in rc_docs:
         sid = r.get("source_id")
         standalone = (r.get("source_type") or "other").lower() == "other" or not sid or sid not in counted_ids
@@ -2503,18 +2532,20 @@ async def _build_daybook(day: str) -> dict:
                     c_amt, o_amt = amt, 0.0
             other_rc_cash += float(c_amt or 0)
             other_rc_online += float(o_amt or 0)
-    standalone_rc_totals = {"cash": other_rc_cash, "online": other_rc_online, "total": other_rc_cash + other_rc_online}
+            other_rc_bank += float(r.get("da_amount") or 0)
+    standalone_rc_totals = {"cash": other_rc_cash, "online": other_rc_online, "bank": other_rc_bank, "total": other_rc_cash + other_rc_online + other_rc_bank}
 
-    # Grand total (all real cash/online inflow for the day):
-    #   - Manual sales cash & online
-    #   - Invoice cash & online
-    #   - Due collection cash & online
+    # Grand total (all real cash/online/bank inflow for the day):
+    #   - Manual sales cash & online & bank
+    #   - Invoice cash & online & bank
+    #   - Due collection cash & online & bank
     #   - Standalone money receipts (see above) — receipts linked to a source counted
     #     today are informational (not added, to avoid double count).
     grand = {
         "cash": col_totals["cash"] + inv_cash + sale_cash + other_rc_cash,
         "online": col_totals["online"] + inv_online + sale_online + other_rc_online,
-        "total": col_totals["total"] + inv_total + sale_totals["total"] + other_rc_cash + other_rc_online,
+        "bank": col_totals["bank"] + inv_bank + sale_bank + other_rc_bank,
+        "total": col_totals["total"] + inv_total + sale_totals["total"] + standalone_rc_totals["total"],
     }
 
     # Cash verification (calculator): the admin/collector counts the physical cash by
@@ -2558,6 +2589,7 @@ async def _build_daybook(day: str) -> dict:
         "due_collection": col_totals["total"],
         "money_receipts": rc_totals["total"],
         "standalone_receipts": standalone_rc_totals["total"],
+        "bank_finance": grand["bank"],  # total DA (finance) received in bank a/c
         "grand_total": grand["total"],  # avoids double counting
     }
 
@@ -2737,14 +2769,16 @@ async def daybook_export_token(
 
 
 def _rc_split(r: dict) -> tuple:
+    """Split a receipt-like doc into (cash, online, bank/DA)."""
     amt = float(r.get("amount") or 0)
     mode = (r.get("payment_mode") or "cash").lower()
     c, o = r.get("cash_amount"), r.get("online_amount")
+    da = float(r.get("da_amount") or 0)
     if c is None or o is None:
         if mode == "online":
-            return 0.0, amt
-        return amt, 0.0
-    return float(c or 0), float(o or 0)
+            return 0.0, amt, da
+        return amt, 0.0, da
+    return float(c or 0), float(o or 0), da
 
 
 @api_router.get("/daybook.xlsx")
@@ -2771,8 +2805,9 @@ async def daybook_xlsx(token: str = Query(...)):
             cell.alignment = Alignment(horizontal="center")
 
     def _widths(ws, widths):
+        from openpyxl.utils import get_column_letter
         for i, w in enumerate(widths):
-            ws.column_dimensions[chr(ord("A") + i)].width = w
+            ws.column_dimensions[get_column_letter(i + 1)].width = w
 
     def _money(ws, cols, start_row=2):
         for c in cols:
@@ -2794,22 +2829,22 @@ async def daybook_xlsx(token: str = Query(...)):
     ws_sum.append([f"Generated {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}"])
     ws_sum.append([])
     _head(ws_sum, [
-        "Date", "Grand Total", "Grand Cash", "Grand Online",
-        "Sales Total", "Sales Cash", "Sales Online",
-        "Invoices Total", "Invoices Cash", "Invoices Online",
-        "Due Collection Total", "Due Coll. Cash", "Due Coll. Online",
-        "Standalone Receipts Total", "Standalone Cash", "Standalone Online",
+        "Date", "Grand Total", "Grand Cash", "Grand Online", "Grand Bank (DA)",
+        "Sales Total", "Sales Cash", "Sales Online", "Sales Bank (DA)",
+        "Invoices Total", "Invoices Cash", "Invoices Online", "Inv Bank (DA)",
+        "Due Collection Total", "Due Coll. Cash", "Due Coll. Online", "Due Coll. Bank (DA)",
+        "Standalone Receipts Total", "Standalone Cash", "Standalone Online", "Standalone Bank (DA)",
         "All Receipts Total (info)",
         "Counted Cash (calculator)", "Expected Cash", "Variance", "Reconciled", "Note",
     ])
 
-    _head(ws_sales, ["Date", "Time", "Employee", "Customer", "Product", "Amount", "Cash", "Online", "Mode", "Receipts", "Notes"])
-    _head(ws_inv, ["Date", "Invoice No", "Employee", "Customer", "Mobile", "Items", "Total", "Cash", "Online", "Mode", "Receipts", "Notes"])
-    _head(ws_col, ["Date", "Collector", "Cash", "Online", "Total", "Receipts", "Notes"])
-    _head(ws_rc, ["Date", "Receipt No", "Employee", "Customer", "Mobile", "Amount", "Cash", "Online", "Mode", "For", "Reference", "Source", "Counted in total?", "Narration"])
+    _head(ws_sales, ["Date", "Time", "Employee", "Customer", "Product", "Amount", "Cash (DP)", "Online (DP)", "Bank (DA)", "Mode", "Receipts", "Notes"])
+    _head(ws_inv, ["Date", "Invoice No", "Employee", "Customer", "Mobile", "Items", "Total", "Cash (DP)", "Online (DP)", "Bank (DA)", "Mode", "Receipts", "Notes"])
+    _head(ws_col, ["Date", "Collector", "Cash", "Online", "Bank (DA)", "Total", "Receipts", "Notes"])
+    _head(ws_rc, ["Date", "Receipt No", "Employee", "Customer", "Mobile", "Amount", "Cash (DP)", "Online (DP)", "Bank (DA)", "Mode", "For", "Reference", "Source", "Counted in total?", "Narration"])
     _head(ws_cash, ["Date", "Verified by", "Verified at"] + [f"₹{d} pcs" for d in DENOMS] + ["Counted Cash", "Expected Cash", "Variance", "Note", "Photos"])
 
-    range_tot = {"grand": 0.0, "cash": 0.0, "online": 0.0}
+    range_tot = {"grand": 0.0, "cash": 0.0, "online": 0.0, "bank": 0.0}
     for day in days:
         d = await _build_daybook(day)
         g = d["grand_total"]
@@ -2819,17 +2854,17 @@ async def daybook_xlsx(token: str = Query(...)):
         counted = rec.get("counted_cash")
         variance = (float(counted) - expected_cash) if counted is not None else None
         ws_sum.append([
-            day, g["total"], g["cash"], g["online"],
-            ss["total"], ss["cash"], ss["online"],
-            iv["total"], iv["cash"], iv["online"],
-            cl["total"], cl["cash"], cl["online"],
-            sa["total"], sa["cash"], sa["online"],
+            day, g["total"], g["cash"], g["online"], g.get("bank", 0),
+            ss["total"], ss["cash"], ss["online"], ss.get("bank", 0),
+            iv["total"], iv["cash"], iv["online"], iv.get("bank", 0),
+            cl["total"], cl["cash"], cl["online"], cl.get("bank", 0),
+            sa["total"], sa["cash"], sa["online"], sa.get("bank", 0),
             rc["total"],
             counted if counted is not None else "", expected_cash, variance if variance is not None else "",
             ("Yes" if abs(variance) < 0.01 else ("Acknowledged" if rec.get("acknowledgement") else "No")) if variance is not None else "Not verified",
             (rec.get("note") or "") + ((" | " + rec["acknowledgement"]) if rec.get("acknowledgement") else ""),
         ])
-        range_tot["grand"] += g["total"]; range_tot["cash"] += g["cash"]; range_tot["online"] += g["online"]
+        range_tot["grand"] += g["total"]; range_tot["cash"] += g["cash"]; range_tot["online"] += g["online"]; range_tot["bank"] += g.get("bank", 0)
 
         for s in ss["entries"]:
             ts = s.get("timestamp") or ""
@@ -2837,32 +2872,33 @@ async def daybook_xlsx(token: str = Query(...)):
                 day, ts.split("T")[1][:8] if "T" in ts else "",
                 s.get("display_name") or s.get("user", ""), s.get("customer_name", ""), s.get("product", ""),
                 float(s.get("amount") or 0), float(s.get("cash_amount") or 0), float(s.get("online_amount") or 0),
+                float(s.get("da_amount") or 0),
                 (s.get("payment_mode") or "cash").upper(),
                 ", ".join(r["receipt_no"] for r in s.get("linked_receipts") or []),
                 s.get("notes", ""),
             ])
         for i in iv["entries"]:
-            c_amt, o_amt = _rc_split({"amount": i.get("total"), "payment_mode": i.get("payment_mode"), "cash_amount": i.get("cash_amount"), "online_amount": i.get("online_amount")})
+            c_amt, o_amt, d_amt = _rc_split({"amount": i.get("total"), "payment_mode": i.get("payment_mode"), "cash_amount": i.get("cash_amount"), "online_amount": i.get("online_amount"), "da_amount": i.get("da_amount")})
             ws_inv.append([
                 day, i.get("invoice_no", ""), i.get("display_name") or i.get("user", ""),
                 i.get("customer_name", ""), i.get("customer_mobile", ""), len(i.get("items") or []),
-                float(i.get("total") or 0), c_amt, o_amt, (i.get("payment_mode") or "cash").upper(),
+                float(i.get("total") or 0), c_amt, o_amt, d_amt, (i.get("payment_mode") or "cash").upper(),
                 ", ".join(r["receipt_no"] for r in i.get("linked_receipts") or []),
                 i.get("notes", ""),
             ])
         for c in cl["entries"]:
             ws_col.append([
                 day, c.get("display_name") or c.get("user", ""),
-                float(c.get("cash_total") or 0), float(c.get("online_total") or 0), float(c.get("grand_total") or 0),
+                float(c.get("cash_total") or 0), float(c.get("online_total") or 0), float(c.get("da_total") or 0), float(c.get("grand_total") or 0),
                 ", ".join(r["receipt_no"] for r in c.get("linked_receipts") or []),
                 c.get("notes", ""),
             ])
         for r in rc["entries"]:
-            c_amt, o_amt = _rc_split(r)
+            c_amt, o_amt, d_amt = _rc_split(r)
             ws_rc.append([
                 day, r.get("receipt_no", ""), r.get("display_name") or r.get("user", ""),
                 r.get("customer_name", ""), r.get("customer_mobile", ""),
-                float(r.get("amount") or 0), c_amt, o_amt, (r.get("payment_mode") or "cash").upper(),
+                float(r.get("amount") or 0), c_amt, o_amt, d_amt, (r.get("payment_mode") or "cash").upper(),
                 (r.get("source_type") or "other").title(), r.get("reference_no") or "", r.get("source_label") or "",
                 "Counted" if r.get("counted_standalone") else "Linked (info only)",
                 r.get("narration") or r.get("notes") or "",
@@ -2878,16 +2914,16 @@ async def daybook_xlsx(token: str = Query(...)):
 
     if len(days) > 1:
         ws_sum.append([])
-        ws_sum.append(["TOTAL", range_tot["grand"], range_tot["cash"], range_tot["online"]])
+        ws_sum.append(["TOTAL", range_tot["grand"], range_tot["cash"], range_tot["online"], range_tot["bank"]])
         for cell in ws_sum[ws_sum.max_row]:
             cell.font = bold
 
-    _money(ws_sum, "BCDEFGHIJKLMNOPQRST", start_row=5)
-    _widths(ws_sum, [12] + [14] * 19 + [12, 40])
-    _money(ws_sales, "FGH"); _widths(ws_sales, [12, 10, 16, 22, 20, 12, 12, 12, 8, 24, 36])
-    _money(ws_inv, "GHI"); _widths(ws_inv, [12, 14, 16, 22, 14, 7, 12, 12, 12, 8, 24, 36])
-    _money(ws_col, "CDE"); _widths(ws_col, [12, 16, 12, 12, 12, 24, 40])
-    _money(ws_rc, "FGH"); _widths(ws_rc, [12, 14, 16, 22, 14, 12, 12, 12, 8, 12, 14, 24, 18, 36])
+    _money(ws_sum, [chr(ord("B") + i) for i in range(24)], start_row=5)
+    _widths(ws_sum, [12] + [14] * 24 + [12, 40])
+    _money(ws_sales, "FGHI"); _widths(ws_sales, [12, 10, 16, 22, 20, 12, 12, 12, 12, 10, 24, 36])
+    _money(ws_inv, "GHIJ"); _widths(ws_inv, [12, 14, 16, 22, 14, 7, 12, 12, 12, 12, 10, 24, 36])
+    _money(ws_col, "CDEF"); _widths(ws_col, [12, 16, 12, 12, 12, 12, 24, 40])
+    _money(ws_rc, "FGHI"); _widths(ws_rc, [12, 14, 16, 22, 14, 12, 12, 12, 12, 10, 12, 14, 24, 18, 36])
     n_den = len(DENOMS)
     _money(ws_cash, [chr(ord("D") + n_den + k) for k in range(3)])
     _widths(ws_cash, [12, 16, 18] + [9] * n_den + [14, 14, 12, 36, 8])
@@ -3193,6 +3229,7 @@ def sale_from_doc(doc: dict) -> Sale:
         payment_mode=mode,
         da_amount=doc.get("da_amount"),
         dp_amount=doc.get("dp_amount"),
+        extra_finance=doc.get("extra_finance"),
         purchase_amount=float(purchase) if purchase is not None else None,
         profit=profit,
         currency=doc.get("currency", "INR"),
@@ -3235,6 +3272,24 @@ def _split_payment(amount: float, cash: Optional[float], online: Optional[float]
     return cash, online, m
 
 
+def _finance_parts(product_value: float, cash: Optional[float], online: Optional[float], da: Optional[float]) -> tuple:
+    """FINANCE mode split: Total paid = DP (down payment = cash+online) + DA (bank disbursement).
+    Both DP and DA are entered by the user (DA is NOT auto-calculated). DP itself may be
+    cash, online, or mixed. When DP+DA exceeds the product value, the excess is stored as
+    extra_finance; when it's less, the shortfall remains as balance due.
+    Returns (cash, online, dp, da, extra)."""
+    cash = 0.0 if cash is None else float(cash)
+    online = 0.0 if online is None else float(online)
+    da = 0.0 if da is None else float(da)
+    if cash < 0 or online < 0 or da < 0:
+        raise HTTPException(400, "DP (cash/online) and DA amounts must be >= 0")
+    dp = round(cash + online, 2)
+    if dp <= 0 and da <= 0:
+        raise HTTPException(400, "Finance mode needs a DP (cash/online) and/or DA (bank) amount")
+    extra = max(0.0, round(dp + da - float(product_value or 0), 2))
+    return cash, online, dp, da, extra
+
+
 @api_router.post("/sales", response_model=Sale)
 async def create_sale(body: SaleBody, u=Depends(current_user)):
     if body.amount < 0:
@@ -3251,8 +3306,18 @@ async def create_sale(body: SaleBody, u=Depends(current_user)):
     else:
         cust_name = body.customer_name or ""
 
-    cash_amt, online_amt, mode = _split_payment(body.amount, body.cash_amount, body.online_amount, body.payment_mode)
-    total = cash_amt + online_amt if (body.cash_amount is not None or body.online_amount is not None) else float(body.amount)
+    is_finance = (body.payment_mode or "").lower() == "finance" or body.da_amount is not None
+    if is_finance:
+        # FINANCE: amount = product value; DP (cash+online split) + DA (bank) entered by user.
+        cash_amt, online_amt, dp_amt, da_amt, extra_fin = _finance_parts(
+            body.amount, body.cash_amount, body.online_amount, body.da_amount
+        )
+        mode = "finance"
+        total = float(body.amount)
+    else:
+        cash_amt, online_amt, mode = _split_payment(body.amount, body.cash_amount, body.online_amount, body.payment_mode)
+        total = cash_amt + online_amt if (body.cash_amount is not None or body.online_amount is not None) else float(body.amount)
+        dp_amt, da_amt, extra_fin = None, None, None
 
     # Product cost / COGS (optional; any employee can enter it at punch time)
     purchase_val: Optional[float] = None
@@ -3273,6 +3338,9 @@ async def create_sale(body: SaleBody, u=Depends(current_user)):
         "cash_amount": cash_amt,
         "online_amount": online_amt,
         "payment_mode": mode,
+        "da_amount": da_amt,
+        "dp_amount": dp_amt,
+        "extra_finance": extra_fin,
         "purchase_amount": purchase_val,
         "currency": body.currency or "INR",
         "product": body.product or "",
@@ -3439,8 +3507,28 @@ async def patch_sale(sid: str, body: SalePatchBody, u=Depends(current_user)):
         upd["customer_id"] = body.customer_id or None
     if body.date_key is not None:
         upd["date_key"] = _backdate_key(body.date_key)  # owner or admin may back-date (any past date)
-    # Cash / online split — keep amount == cash + online
-    if body.cash_amount is not None or body.online_amount is not None:
+    # Cash / online split — keep amount == cash + online (non-finance modes)
+    eff_mode = (body.payment_mode or existing.get("payment_mode") or "cash").lower()
+    if body.payment_mode is not None:
+        upd["payment_mode"] = eff_mode
+    if eff_mode == "finance" or body.da_amount is not None:
+        # FINANCE: amount stays the product value; DP (cash+online) + DA (bank) are separate.
+        cash = float(body.cash_amount if body.cash_amount is not None else existing.get("cash_amount") or 0)
+        online = float(body.online_amount if body.online_amount is not None else existing.get("online_amount") or 0)
+        da = float(body.da_amount if body.da_amount is not None else existing.get("da_amount") or 0)
+        if cash < 0 or online < 0 or da < 0:
+            raise HTTPException(400, "DP (cash/online) and DA amounts must be >= 0")
+        dp = round(cash + online, 2)
+        if dp <= 0 and da <= 0:
+            raise HTTPException(400, "Finance mode needs a DP (cash/online) and/or DA (bank) amount")
+        prod_val = float(upd.get("amount", existing.get("amount") or 0))
+        upd["cash_amount"] = cash
+        upd["online_amount"] = online
+        upd["da_amount"] = da
+        upd["dp_amount"] = dp
+        upd["extra_finance"] = max(0.0, round(dp + da - prod_val, 2))
+        upd["payment_mode"] = "finance"
+    elif body.cash_amount is not None or body.online_amount is not None:
         cash = float(body.cash_amount if body.cash_amount is not None else existing.get("cash_amount") or 0)
         online = float(body.online_amount if body.online_amount is not None else existing.get("online_amount") or 0)
         if cash < 0 or online < 0:
@@ -3449,10 +3537,18 @@ async def patch_sale(sid: str, body: SalePatchBody, u=Depends(current_user)):
         upd["online_amount"] = online
         upd["amount"] = round(cash + online, 2)
         upd["payment_mode"] = "mixed" if (cash > 0 and online > 0) else ("online" if online > 0 else "cash")
+        upd["da_amount"] = None
+        upd["dp_amount"] = None
+        upd["extra_finance"] = None
     elif "amount" in upd:
         # Amount changed without an explicit split → keep the existing mode, rescale single-mode sales
         mode = (existing.get("payment_mode") or "cash").lower()
-        if mode == "online":
+        if mode == "finance":
+            # Product value changed: recompute the excess against the existing DP+DA
+            dp = float(existing.get("dp_amount") or (float(existing.get("cash_amount") or 0) + float(existing.get("online_amount") or 0)))
+            da = float(existing.get("da_amount") or 0)
+            upd["extra_finance"] = max(0.0, round(dp + da - upd["amount"], 2))
+        elif mode == "online":
             upd["cash_amount"], upd["online_amount"] = 0.0, upd["amount"]
         elif mode == "cash":
             upd["cash_amount"], upd["online_amount"] = upd["amount"], 0.0
@@ -3558,6 +3654,7 @@ async def _build_document_pdf(
     customer_name: str, customer_mobile: str, customer_address: str,
     items_rows: List[List[str]], grand_total: float,
     footer_notes: str = "", narration: str = "", advance_paid: float = 0.0,
+    finance: Optional[dict] = None,  # {dp, da, cash, online, extra, balance_due}
 ) -> bytes:
     """Render a shared invoice/receipt PDF."""
     settings = await get_settings_doc()
@@ -3661,6 +3758,33 @@ async def _build_document_pdf(
         story.append(bal_table)
         story.append(Spacer(1, 10))
 
+    # Finance breakdown: DP (down payment, cash/online) + DA (bank disbursement)
+    if finance:
+        fin_rows = [
+            ["Down payment (DP)", _rupees(finance.get("dp") or 0)],
+            [f"   · Cash {_rupees(finance.get('cash') or 0)}  +  Online {_rupees(finance.get('online') or 0)}", ""],
+            ["Finance disbursement (DA) — to bank a/c", _rupees(finance.get("da") or 0)],
+        ]
+        if (finance.get("extra") or 0) > 0:
+            fin_rows.append(["Extra finance (excess received)", _rupees(finance["extra"])])
+        if (finance.get("balance_due") or 0) > 0:
+            fin_rows.append(["Balance due", _rupees(finance["balance_due"])])
+        fin_table = Table(fin_rows, colWidths=[13*cm, 4*cm])
+        fin_table.setStyle(TableStyle([
+            ("ALIGN", (1,0), (1,-1), "RIGHT"),
+            ("FONTSIZE", (0,0), (-1,-1), 11),
+            ("FONTNAME", (0,0), (-1,-1), "Helvetica"),
+            ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
+            ("FONTNAME", (0,2), (-1,2), "Helvetica-Bold"),
+            ("TEXTCOLOR", (0,2), (1,2), _colors.HexColor("#1D4ED8")),
+            ("FONTSIZE", (0,1), (-1,1), 9),
+            ("TEXTCOLOR", (0,1), (-1,1), _colors.HexColor("#6B7280")),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 5),
+            ("TOPPADDING", (0,0), (-1,-1), 5),
+        ]))
+        story.append(fin_table)
+        story.append(Spacer(1, 10))
+
     if narration:
         story.append(Paragraph("NARRATION", lbl_style))
         story.append(Paragraph(narration, body_style))
@@ -3719,36 +3843,47 @@ async def create_invoice(body: InvoiceCreateBody, u=Depends(current_user)):
     now = now_iso()
     date_key = _backdate_key(body.date_key)
 
-    # Payment split (cash + online). Default: entire amount is cash.
-    cash_amt = body.cash_amount if body.cash_amount is not None else None
-    online_amt = body.online_amount if body.online_amount is not None else None
-    if cash_amt is None and online_amt is None:
-        cash_amt, online_amt = total, 0.0
-    elif cash_amt is None:
-        cash_amt = max(0.0, total - float(online_amt or 0))
-    elif online_amt is None:
-        online_amt = max(0.0, total - float(cash_amt or 0))
-    cash_amt = float(cash_amt or 0)
-    online_amt = float(online_amt or 0)
-    if cash_amt < 0 or online_amt < 0:
-        raise HTTPException(400, "Cash and online amounts must be >= 0")
-    if abs((cash_amt + online_amt) - total) > 0.01:
-        raise HTTPException(400, f"Cash ({cash_amt}) + Online ({online_amt}) must equal invoice total ({total})")
-    if cash_amt > 0 and online_amt > 0:
-        pay_mode = "mixed"
-    elif online_amt > 0:
-        pay_mode = "online"
+    # Payment split. FINANCE mode (da_amount given): DP = cash+online parts, DA = bank
+    # disbursement; DP+DA need NOT equal the total (excess → extra_finance, shortfall →
+    # balance due). Otherwise: cash/online split must equal the total (default: all cash).
+    is_finance = body.da_amount is not None
+    if is_finance:
+        cash_amt = float(body.cash_amount or 0)
+        online_amt = float(body.online_amount or 0)
+        cash_amt, online_amt, dp_amt, da_amt, _ = _finance_parts(0, cash_amt, online_amt, body.da_amount)
+        pay_mode = "finance"
     else:
-        pay_mode = "cash"
+        cash_amt = body.cash_amount if body.cash_amount is not None else None
+        online_amt = body.online_amount if body.online_amount is not None else None
+        if cash_amt is None and online_amt is None:
+            cash_amt, online_amt = total, 0.0
+        elif cash_amt is None:
+            cash_amt = max(0.0, total - float(online_amt or 0))
+        elif online_amt is None:
+            online_amt = max(0.0, total - float(cash_amt or 0))
+        cash_amt = float(cash_amt or 0)
+        online_amt = float(online_amt or 0)
+        if cash_amt < 0 or online_amt < 0:
+            raise HTTPException(400, "Cash and online amounts must be >= 0")
+        if abs((cash_amt + online_amt) - total) > 0.01:
+            raise HTTPException(400, f"Cash ({cash_amt}) + Online ({online_amt}) must equal invoice total ({total})")
+        dp_amt, da_amt = None, None
+        if cash_amt > 0 and online_amt > 0:
+            pay_mode = "mixed"
+        elif online_amt > 0:
+            pay_mode = "online"
+        else:
+            pay_mode = "cash"
 
     # Build PDF (include payment breakdown in footer)
     rows = [[str(i+1), it["name"], f"{it['qty']:g}", _rupees(it["unit_price"]), _rupees(it["amount"])] for i, it in enumerate(items)]
     display = await _display_name_for(u["username"])
-    pay_line = (
-        f"Payment: MIXED · Cash {_rupees(cash_amt)} + Online {_rupees(online_amt)}"
-        if pay_mode == "mixed"
-        else f"Payment mode: {pay_mode.upper()}"
-    )
+    if pay_mode == "finance":
+        pay_line = f"Payment: FINANCE · DP {_rupees(dp_amt)} (Cash {_rupees(cash_amt)} + Online {_rupees(online_amt)}) + DA {_rupees(da_amt)} (Bank)"
+    elif pay_mode == "mixed":
+        pay_line = f"Payment: MIXED · Cash {_rupees(cash_amt)} + Online {_rupees(online_amt)}"
+    else:
+        pay_line = f"Payment mode: {pay_mode.upper()}"
 
     # Apply any advance receipts the caller selected (partial allocations supported)
     # BEFORE rendering the PDF so the document can show "Advance paid" + "Balance due".
@@ -3759,7 +3894,14 @@ async def create_invoice(body: InvoiceCreateBody, u=Depends(current_user)):
         advance_applied = await _apply_advance_allocations(
             pairs, linked_customer_id, body.customer_mobile, "invoice", inv_id, f"Invoice {invoice_no}"
         )
-    balance_due = round(total - advance_applied, 2)
+    if is_finance:
+        # DP+DA measured against what the customer still owes after advances
+        effective_due = round(total - advance_applied, 2)
+        extra_fin = max(0.0, round(dp_amt + da_amt - effective_due, 2))
+        balance_due = max(0.0, round(effective_due - dp_amt - da_amt, 2))
+    else:
+        extra_fin = None
+        balance_due = round(total - advance_applied, 2)
 
     pdf_bytes = await _build_document_pdf(
         doc_kind="invoice", doc_no=invoice_no,
@@ -3769,6 +3911,8 @@ async def create_invoice(body: InvoiceCreateBody, u=Depends(current_user)):
         items_rows=rows, grand_total=total,
         footer_notes=(body.notes or "") + ("\n" + pay_line if body.notes else pay_line),
         advance_paid=advance_applied,
+        finance=({"dp": dp_amt, "da": da_amt, "cash": cash_amt, "online": online_amt,
+                  "extra": extra_fin or 0, "balance_due": balance_due} if is_finance else None),
     )
     pdf_path = f"{APP_NAME}/invoices/{u['username']}/{invoice_no}.pdf"
     await put_object(pdf_path, pdf_bytes, "application/pdf")
@@ -3792,6 +3936,9 @@ async def create_invoice(body: InvoiceCreateBody, u=Depends(current_user)):
         "cash_amount": cash_amt,
         "online_amount": online_amt,
         "payment_mode": pay_mode,
+        "da_amount": da_amt,
+        "dp_amount": dp_amt,
+        "extra_finance": extra_fin,
         "notes": (body.notes or "").strip(),
         "sale_id": None,
         "pdf_path": pdf_path,
@@ -3921,21 +4068,33 @@ async def replace_invoice(iid: str, body: InvoiceUpdateBody, u=Depends(current_u
     if not DATE_RE.match(date_key):
         raise HTTPException(400, "date_key must be YYYY-MM-DD")
 
-    cash_amt = body.cash_amount
-    online_amt = body.online_amount
-    if cash_amt is None and online_amt is None:
-        cash_amt, online_amt = total, 0.0
-    elif cash_amt is None:
-        cash_amt = max(0.0, total - float(online_amt or 0))
-    elif online_amt is None:
-        online_amt = max(0.0, total - float(cash_amt or 0))
-    cash_amt = float(cash_amt or 0)
-    online_amt = float(online_amt or 0)
-    if cash_amt < 0 or online_amt < 0:
-        raise HTTPException(400, "Cash and online amounts must be >= 0")
-    if abs((cash_amt + online_amt) - total) > 0.01:
-        raise HTTPException(400, f"Cash ({cash_amt}) + Online ({online_amt}) must equal invoice total ({total})")
-    pay_mode = "mixed" if (cash_amt > 0 and online_amt > 0) else ("online" if online_amt > 0 else "cash")
+    is_finance = body.da_amount is not None
+    if is_finance:
+        cash_amt, online_amt, dp_amt, da_amt, _ = _finance_parts(
+            0, float(body.cash_amount or 0), float(body.online_amount or 0), body.da_amount
+        )
+        pay_mode = "finance"
+        # No advances on edit → DP+DA measured against the full total
+        extra_fin = max(0.0, round(dp_amt + da_amt - total, 2))
+        balance_due = max(0.0, round(total - dp_amt - da_amt, 2))
+    else:
+        cash_amt = body.cash_amount
+        online_amt = body.online_amount
+        if cash_amt is None and online_amt is None:
+            cash_amt, online_amt = total, 0.0
+        elif cash_amt is None:
+            cash_amt = max(0.0, total - float(online_amt or 0))
+        elif online_amt is None:
+            online_amt = max(0.0, total - float(cash_amt or 0))
+        cash_amt = float(cash_amt or 0)
+        online_amt = float(online_amt or 0)
+        if cash_amt < 0 or online_amt < 0:
+            raise HTTPException(400, "Cash and online amounts must be >= 0")
+        if abs((cash_amt + online_amt) - total) > 0.01:
+            raise HTTPException(400, f"Cash ({cash_amt}) + Online ({online_amt}) must equal invoice total ({total})")
+        pay_mode = "mixed" if (cash_amt > 0 and online_amt > 0) else ("online" if online_amt > 0 else "cash")
+        dp_amt, da_amt, extra_fin = None, None, None
+        balance_due = round(total - float(doc.get("advance_applied") or 0), 2)
 
     cust = await _get_or_create_customer_by_phone(
         name=body.customer_name, phone=body.customer_mobile, address=body.customer_address or "",
@@ -3945,16 +4104,21 @@ async def replace_invoice(iid: str, body: InvoiceUpdateBody, u=Depends(current_u
 
     rows = [[str(i+1), it["name"], f"{it['qty']:g}", _rupees(it["unit_price"]), _rupees(it["amount"])] for i, it in enumerate(items)]
     display = await _display_name_for(doc["user"])
-    pay_line = (
-        f"Payment: MIXED · Cash {_rupees(cash_amt)} + Online {_rupees(online_amt)}"
-        if pay_mode == "mixed" else f"Payment mode: {pay_mode.upper()}"
-    )
+    if pay_mode == "finance":
+        pay_line = f"Payment: FINANCE · DP {_rupees(dp_amt)} (Cash {_rupees(cash_amt)} + Online {_rupees(online_amt)}) + DA {_rupees(da_amt)} (Bank)"
+    elif pay_mode == "mixed":
+        pay_line = f"Payment: MIXED · Cash {_rupees(cash_amt)} + Online {_rupees(online_amt)}"
+    else:
+        pay_line = f"Payment mode: {pay_mode.upper()}"
     notes = (body.notes or "").strip()
     pdf_bytes = await _build_document_pdf(
         doc_kind="invoice", doc_no=doc["invoice_no"], generated_by=display, date_key=date_key,
         customer_name=body.customer_name, customer_mobile=body.customer_mobile,
         customer_address=body.customer_address or "", items_rows=rows, grand_total=total,
         footer_notes=(notes + "\n" if notes else "") + pay_line + f"\n(Edited by {u['username']} on {today_key()})",
+        advance_paid=float(doc.get("advance_applied") or 0),
+        finance=({"dp": dp_amt, "da": da_amt, "cash": cash_amt, "online": online_amt,
+                  "extra": extra_fin or 0, "balance_due": balance_due} if is_finance else None),
     )
     pdf_path = doc.get("pdf_path") or f"{APP_NAME}/invoices/{doc['user']}/{doc['invoice_no']}.pdf"
     await put_object(pdf_path, pdf_bytes, "application/pdf")
@@ -3966,6 +4130,8 @@ async def replace_invoice(iid: str, body: InvoiceUpdateBody, u=Depends(current_u
         "items": items, "subtotal": subtotal, "total": total,
         "cost_total": cost_total, "profit": round(total - cost_total, 2),
         "cash_amount": cash_amt, "online_amount": online_amt, "payment_mode": pay_mode,
+        "da_amount": da_amt, "dp_amount": dp_amt, "extra_finance": extra_fin,
+        "balance_due": balance_due,
         "notes": notes, "pdf_path": pdf_path, "date_key": date_key,
         "updated_at": now_iso(), "updated_by": u["username"],
         "status": _entry_status(u, date_key),  # only back-dated entries need admin review
@@ -4066,7 +4232,6 @@ async def _get_or_create_customer_by_phone(
         "id": str(uuid.uuid4()),
         "name": name,
         "phone": phone,
-        "phone_norm": phone_n,
         "address": address or "",
         "status": "new",
         "assigned_to": owner_username,
@@ -4075,6 +4240,10 @@ async def _get_or_create_customer_by_phone(
         "created_at": now,
         "updated_at": now,
     }
+    # Sparse unique index skips MISSING fields but NOT empty strings — only set
+    # phone_norm when we actually have a phone, else empty-phone customers collide.
+    if phone_n:
+        doc["phone_norm"] = phone_n
     try:
         await db.customers.insert_one(doc)
     except Exception:
@@ -4098,12 +4267,20 @@ async def create_receipt(body: ReceiptCreateBody, u=Depends(current_user)):
     if st not in SOURCE_TYPES:
         raise HTTPException(400, "Invalid source_type")
     mode = (body.payment_mode or "cash").lower()
-    if mode not in {"cash", "online", "mixed"}:
+    if mode not in {"cash", "online", "mixed", "finance"}:
         raise HTTPException(400, "Invalid payment_mode")
 
     # Compute cash/online split
     amt = float(body.amount)
-    if mode == "cash":
+    da_amt: Optional[float] = None
+    dp_amt: Optional[float] = None
+    if mode == "finance":
+        # FINANCE: DP (cash+online split) + DA (bank); receipt total = DP + DA (auto).
+        cash_amt, online_amt, dp_amt, da_amt, _ = _finance_parts(
+            0, body.cash_amount, body.online_amount, body.da_amount
+        )
+        amt = round(dp_amt + da_amt, 2)
+    elif mode == "cash":
         cash_amt = amt
         online_amt = 0.0
     elif mode == "online":
@@ -4158,8 +4335,21 @@ async def create_receipt(body: ReceiptCreateBody, u=Depends(current_user)):
 
     ref_line = f"\nReference: {ref_no}" if ref_no else "\n(Advance payment — no reference)"
 
-    # PDF: show payment mode + breakdown (esp. for mixed)
-    if mode == "mixed":
+    # PDF: show payment mode + breakdown (esp. for mixed / finance)
+    if mode == "finance":
+        items_rows = []
+        n = 0
+        if cash_amt > 0:
+            n += 1
+            items_rows.append([str(n), f"Down payment (DP) — Cash · {src_label or st.capitalize()}", "1", _rupees(cash_amt), _rupees(cash_amt)])
+        if online_amt > 0:
+            n += 1
+            items_rows.append([str(n), f"Down payment (DP) — Online · {src_label or st.capitalize()}", "1", _rupees(online_amt), _rupees(online_amt)])
+        if da_amt and da_amt > 0:
+            n += 1
+            items_rows.append([str(n), "Finance disbursement (DA) — to bank a/c", "1", _rupees(da_amt), _rupees(da_amt)])
+        footer_extra = f"\nPayment mode: FINANCE · DP {_rupees(dp_amt or 0)} (Cash {_rupees(cash_amt)} + Online {_rupees(online_amt)}) + DA {_rupees(da_amt or 0)} (Bank){ref_line}"
+    elif mode == "mixed":
         items_rows = [
             ["1", f"Received against {src_label or st.capitalize()} (Cash)", "1", _rupees(cash_amt), _rupees(cash_amt)],
             ["2", f"Received against {src_label or st.capitalize()} (Online)", "1", _rupees(online_amt), _rupees(online_amt)],
@@ -4193,6 +4383,9 @@ async def create_receipt(body: ReceiptCreateBody, u=Depends(current_user)):
         "payment_mode": mode,
         "cash_amount": cash_amt,
         "online_amount": online_amt,
+        "da_amount": da_amt,
+        "dp_amount": dp_amt,
+        "extra_finance": 0.0 if mode == "finance" else None,
         "source_type": st,
         "source_id": body.source_id,
         "source_label": src_label,
@@ -4519,9 +4712,10 @@ class ReceiptUpdateBody(BaseModel):
     customer_mobile: str = ""
     customer_address: Optional[str] = ""
     amount: float
-    payment_mode: str = "cash"
+    payment_mode: str = "cash"  # cash | online | mixed | finance
     cash_amount: Optional[float] = None
     online_amount: Optional[float] = None
+    da_amount: Optional[float] = None  # FINANCE: Disbursement Amount (bank); total = DP + DA
     source_type: str = "other"
     source_id: Optional[str] = None
     reference_no: Optional[str] = None
@@ -4544,12 +4738,20 @@ async def replace_receipt(rid: str, body: ReceiptUpdateBody, u=Depends(current_u
     if st not in SOURCE_TYPES:
         raise HTTPException(400, "Invalid source_type")
     mode = (body.payment_mode or "cash").lower()
-    if mode not in {"cash", "online", "mixed"}:
+    if mode not in {"cash", "online", "mixed", "finance"}:
         raise HTTPException(400, "Invalid payment_mode")
     amt = float(body.amount)
     if amt < 0:
         raise HTTPException(400, "Amount must be >= 0")
-    if mode == "cash":
+    da_amt: Optional[float] = None
+    dp_amt: Optional[float] = None
+    if mode == "finance":
+        # FINANCE: DP (cash+online split) + DA (bank); receipt total = DP + DA (auto).
+        cash_amt, online_amt, dp_amt, da_amt, _ = _finance_parts(
+            0, body.cash_amount, body.online_amount, body.da_amount
+        )
+        amt = round(dp_amt + da_amt, 2)
+    elif mode == "cash":
         cash_amt, online_amt = amt, 0.0
     elif mode == "online":
         cash_amt, online_amt = 0.0, amt
@@ -4578,7 +4780,20 @@ async def replace_receipt(rid: str, body: ReceiptUpdateBody, u=Depends(current_u
     else:
         ref_no = await _derive_reference_no(st, body.source_id)
     ref_line = f"\nReference: {ref_no}" if ref_no else "\n(Advance payment — no reference)"
-    if mode == "mixed":
+    if mode == "finance":
+        items_rows = []
+        n = 0
+        if cash_amt > 0:
+            n += 1
+            items_rows.append([str(n), f"Down payment (DP) — Cash · {src_label or st.capitalize()}", "1", _rupees(cash_amt), _rupees(cash_amt)])
+        if online_amt > 0:
+            n += 1
+            items_rows.append([str(n), f"Down payment (DP) — Online · {src_label or st.capitalize()}", "1", _rupees(online_amt), _rupees(online_amt)])
+        if da_amt and da_amt > 0:
+            n += 1
+            items_rows.append([str(n), "Finance disbursement (DA) — to bank a/c", "1", _rupees(da_amt), _rupees(da_amt)])
+        footer_extra = f"\nPayment mode: FINANCE · DP {_rupees(dp_amt or 0)} (Cash {_rupees(cash_amt)} + Online {_rupees(online_amt)}) + DA {_rupees(da_amt or 0)} (Bank){ref_line}"
+    elif mode == "mixed":
         items_rows = [
             ["1", f"Received against {src_label or st.capitalize()} (Cash)", "1", _rupees(cash_amt), _rupees(cash_amt)],
             ["2", f"Received against {src_label or st.capitalize()} (Online)", "1", _rupees(online_amt), _rupees(online_amt)],
@@ -4603,6 +4818,7 @@ async def replace_receipt(rid: str, body: ReceiptUpdateBody, u=Depends(current_u
         "customer_mobile": (body.customer_mobile or "").strip(),
         "customer_address": (body.customer_address or "").strip(),
         "amount": amt, "payment_mode": mode, "cash_amount": cash_amt, "online_amount": online_amt,
+        "da_amount": da_amt, "dp_amount": dp_amt, "extra_finance": 0.0 if mode == "finance" else None,
         "source_type": st, "source_id": body.source_id, "source_label": src_label, "reference_no": ref_no,
         "narration": (body.narration or "").strip(), "notes": (body.notes or "").strip(),
         "pdf_path": pdf_path, "date_key": date_key,

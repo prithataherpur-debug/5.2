@@ -17,6 +17,20 @@ import { fmtDMY, toApiDate } from "@/src/lib/date";
 
 const fmt = (n: number) => "₹" + (Math.round(n * 100) / 100).toLocaleString("en-IN");
 
+function FinanceHintText({ total, cashStr, onlineStr, daStr }: { total: number; cashStr: string; onlineStr: string; daStr: string }) {
+  const dp = (parseFloat(cashStr || "0") || 0) + (parseFloat(onlineStr || "0") || 0);
+  const da = parseFloat(daStr || "0") || 0;
+  const paid = dp + da;
+  if (paid <= 0) return null;
+  const diff = Math.round((paid - total) * 100) / 100;
+  return (
+    <Text style={{ fontSize: 11, fontWeight: "700", color: "#1D4ED8", marginTop: 8 }} testID="inv-finance-hint">
+      {`DP ${fmt(dp)} + DA ${fmt(da)} = ${fmt(paid)} vs bill ${fmt(total)}`}
+      {diff > 0 ? `  ·  Extra finance ${fmt(diff)}` : diff < 0 ? `  ·  Balance ${fmt(-diff)} due` : "  ·  exact"}
+    </Text>
+  );
+}
+
 export default function InvoicesScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -277,9 +291,10 @@ function InvoiceEditor({
   const [customer, setCustomer] = useState<PickerCustomer>({ customer_id: null, name: "", mobile: "", address: "" });
   const [notes, setNotes] = useState("");
   const [dateKey, setDateKey] = useState("");  // optional back-date (YYYY-MM-DD, any past date)
-  const [payMode, setPayMode] = useState<"cash" | "online" | "mixed">("cash");
+  const [payMode, setPayMode] = useState<"cash" | "online" | "mixed" | "finance">("cash");
   const [cashPart, setCashPart] = useState("");
   const [onlinePart, setOnlinePart] = useState("");
+  const [daPart, setDaPart] = useState("");  // finance: DA (bank disbursement)
   const [items, setItems] = useState<{ id: string; name: string; qty: string; rate: string; cost: string }[]>([
     { id: "1", name: "", qty: "1", rate: "", cost: "" },
   ]);
@@ -302,8 +317,9 @@ function InvoiceEditor({
       setDateKey(editing.date_key ? fmtDMY(editing.date_key) : "");
       setItems((editing.items || []).map((it, i) => ({ id: `${i}-${Date.now()}`, name: it.name, qty: String(it.qty), rate: String(it.unit_price), cost: it.unit_cost ? String(it.unit_cost) : "" })));
       setPayMode((editing.payment_mode as any) || "cash");
-      setCashPart(editing.payment_mode === "mixed" ? String(editing.cash_amount || "") : "");
-      setOnlinePart(editing.payment_mode === "mixed" ? String(editing.online_amount || "") : "");
+      setCashPart(editing.payment_mode === "mixed" || editing.payment_mode === "finance" ? String(editing.cash_amount || "") : "");
+      setOnlinePart(editing.payment_mode === "mixed" || editing.payment_mode === "finance" ? String(editing.online_amount || "") : "");
+      setDaPart(editing.payment_mode === "finance" ? String(editing.da_amount || "") : "");
       setErr(""); setAdvances([]); setSelectedAdvIds(new Set()); setAdvAmounts({}); setAdvTouched(new Set());
       return;
     }
@@ -311,7 +327,7 @@ function InvoiceEditor({
     setNotes("");
     setDateKey("");
     setItems([{ id: String(Date.now()), name: "", qty: "1", rate: "", cost: "" }]);
-    setPayMode("cash"); setCashPart(""); setOnlinePart("");
+    setPayMode("cash"); setCashPart(""); setOnlinePart(""); setDaPart("");
     setErr("");
     setAdvances([]);
     setSelectedAdvIds(new Set());
@@ -433,6 +449,7 @@ function InvoiceEditor({
     // Payment split
     let cashAmt: number | undefined;
     let onlineAmt: number | undefined;
+    let daAmt: number | undefined;
     const tot = Math.round(total * 100) / 100;
     if (payMode === "online") { cashAmt = 0; onlineAmt = tot; }
     else if (payMode === "mixed") {
@@ -440,6 +457,16 @@ function InvoiceEditor({
       onlineAmt = parseFloat(onlinePart || "0") || 0;
       if (Math.abs(cashAmt + onlineAmt - tot) > 0.01) {
         setErr(`Cash (₹${cashAmt}) + Online (₹${onlineAmt}) must equal the grand total ₹${tot}.`);
+        return;
+      }
+    } else if (payMode === "finance") {
+      // FINANCE: DP (cash/online split) + DA (bank) — need NOT equal the total;
+      // excess is stored as extra finance, shortfall stays as balance due.
+      cashAmt = parseFloat(cashPart || "0") || 0;
+      onlineAmt = parseFloat(onlinePart || "0") || 0;
+      daAmt = parseFloat(daPart || "0") || 0;
+      if (cashAmt + onlineAmt + daAmt <= 0) {
+        setErr("Finance mode: enter DP (cash/online) and/or DA (bank) amount.");
         return;
       }
     } else { cashAmt = tot; onlineAmt = 0; }
@@ -457,6 +484,7 @@ function InvoiceEditor({
         items: cleanItems,
         cash_amount: cashAmt,
         online_amount: onlineAmt,
+        da_amount: payMode === "finance" ? daAmt : undefined,
         date_key: invDate || undefined,
       };
       if (editing) {
@@ -667,12 +695,12 @@ function InvoiceEditor({
 
             <Text style={styles.label}>Payment received as</Text>
             <View style={styles.payRow}>
-              {(["cash", "online", "mixed"] as const).map((m) => {
+              {(["cash", "online", "mixed", "finance"] as const).map((m) => {
                 const active = payMode === m;
                 return (
                   <Pressable key={m} onPress={() => setPayMode(m)} style={[styles.payChip, active && styles.payChipActive]} testID={`inv-pay-${m}`}>
-                    <Ionicons name={m === "cash" ? "cash-outline" : m === "online" ? "card-outline" : "swap-horizontal-outline"} size={14} color={active ? theme.color.brand : theme.color.muted} />
-                    <Text style={[styles.payChipText, active && { color: theme.color.brand }]}>{m === "cash" ? "Cash" : m === "online" ? "Online" : "Mixed"}</Text>
+                    <Ionicons name={m === "cash" ? "cash-outline" : m === "online" ? "card-outline" : m === "mixed" ? "swap-horizontal-outline" : "business-outline"} size={14} color={active ? theme.color.brand : theme.color.muted} />
+                    <Text style={[styles.payChipText, active && { color: theme.color.brand }]}>{m === "cash" ? "Cash" : m === "online" ? "Online" : m === "mixed" ? "Mixed" : "Finance"}</Text>
                   </Pressable>
                 );
               })}
@@ -687,6 +715,23 @@ function InvoiceEditor({
                   <Text style={styles.miniLabel}>Online (₹)</Text>
                   <TextInput value={onlinePart} onChangeText={setOnlinePart} keyboardType="decimal-pad" placeholder="0" placeholderTextColor={theme.color.muted} style={styles.miniInput} testID="inv-online" />
                 </View>
+              </View>
+            ) : null}
+            {payMode === "finance" ? (
+              <View style={styles.finBox} testID="inv-finance">
+                <View style={{ flexDirection: "row", gap: 8 }}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.miniLabel}>DP — cash (₹)</Text>
+                    <TextInput value={cashPart} onChangeText={setCashPart} keyboardType="decimal-pad" placeholder="0" placeholderTextColor={theme.color.muted} style={styles.miniInput} testID="inv-dp-cash" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.miniLabel}>DP — online (₹)</Text>
+                    <TextInput value={onlinePart} onChangeText={setOnlinePart} keyboardType="decimal-pad" placeholder="0" placeholderTextColor={theme.color.muted} style={styles.miniInput} testID="inv-dp-online" />
+                  </View>
+                </View>
+                <Text style={[styles.miniLabel, { marginTop: 8 }]}>DA — finance to bank a/c (₹)</Text>
+                <TextInput value={daPart} onChangeText={setDaPart} keyboardType="decimal-pad" placeholder="0" placeholderTextColor={theme.color.muted} style={styles.miniInput} testID="inv-da" />
+                <FinanceHintText total={total} cashStr={cashPart} onlineStr={onlinePart} daStr={daPart} />
               </View>
             ) : null}
 
@@ -823,6 +868,7 @@ const styles = StyleSheet.create({
   rowDelBtn: {},
   miniLabel: { fontSize: 10, color: theme.color.muted, fontWeight: "700", marginBottom: 4 },
   miniInput: { height: 40, borderRadius: theme.radius.sm, borderWidth: 1, borderColor: theme.color.border, paddingHorizontal: 8, color: theme.color.onSurface, fontSize: 14, backgroundColor: theme.color.surfaceSecondary, textAlign: "right" },
+  finBox: { marginTop: 8, padding: 10, borderRadius: theme.radius.md, backgroundColor: "#EFF6FF", borderWidth: 1, borderColor: "#3B82F6" + "44" },
   subBox: { height: 40, borderRadius: theme.radius.sm, backgroundColor: theme.color.brandTertiary, alignItems: "flex-end", justifyContent: "center", paddingHorizontal: 8 },
   subText: { fontWeight: "800", color: theme.color.brand, fontSize: 14 },
   itemSummaryRow: { flexDirection: "row", gap: 8, marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: theme.color.border, borderStyle: "dashed" },

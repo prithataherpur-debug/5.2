@@ -27,6 +27,10 @@ export default function PunchSaleModal({ visible, onClose, onSaved, presetCustom
   const [newAddress, setNewAddress] = useState("");
   const [dupCustomer, setDupCustomer] = useState<Customer | null>(null);
   const [amount, setAmount] = useState("");
+  const [payMode, setPayMode] = useState<"cash" | "online" | "mixed" | "finance">("cash");
+  const [cashPart, setCashPart] = useState("");
+  const [onlinePart, setOnlinePart] = useState("");
+  const [daAmount, setDaAmount] = useState("");
   const [dateKey, setDateKey] = useState("");  // optional back-date (YYYY-MM-DD, any past date)
   const [product, setProduct] = useState("");
   const [purchaseCost, setPurchaseCost] = useState("");
@@ -48,6 +52,10 @@ export default function PunchSaleModal({ visible, onClose, onSaved, presetCustom
       setNewAddress("");
       setDupCustomer(null);
       setAmount("");
+      setPayMode("cash");
+      setCashPart("");
+      setOnlinePart("");
+      setDaAmount("");
       setDateKey("");
       setProduct("");
       setPurchaseCost("");
@@ -158,6 +166,18 @@ export default function PunchSaleModal({ visible, onClose, onSaved, presetCustom
       setErr("Enter a valid amount.");
       return;
     }
+    // Payment split validation
+    const cashN = parseFloat(cashPart || "0") || 0;
+    const onlineN = parseFloat(onlinePart || "0") || 0;
+    const daN = parseFloat(daAmount || "0") || 0;
+    if (payMode === "mixed" && Math.abs(cashN + onlineN - n) > 0.01) {
+      setErr(`Cash (₹${cashN}) + Online (₹${onlineN}) must equal the amount ₹${n}.`);
+      return;
+    }
+    if (payMode === "finance" && cashN + onlineN + daN <= 0) {
+      setErr("Finance mode: enter DP (cash/online) and/or DA (bank) amount.");
+      return;
+    }
     if (mode === "new") {
       if (!newName.trim()) {
         setErr("Enter customer name.");
@@ -234,6 +254,10 @@ export default function PunchSaleModal({ visible, onClose, onSaved, presetCustom
         purchase_amount: purchaseVal,
         advance_allocations: allocations,
         date_key: saleDate || undefined,
+        payment_mode: payMode,
+        cash_amount: payMode === "mixed" || payMode === "finance" ? cashN : undefined,
+        online_amount: payMode === "mixed" || payMode === "finance" ? onlineN : undefined,
+        da_amount: payMode === "finance" ? daN : undefined,
       });
       onSaved();
     } catch (e: any) {
@@ -470,6 +494,58 @@ export default function PunchSaleModal({ visible, onClose, onSaved, presetCustom
               returnKeyType="done"
             />
 
+            <Text style={styles.label}>Payment mode</Text>
+            <View style={styles.segment}>
+              {(["cash", "online", "mixed", "finance"] as const).map((m) => (
+                <Pressable
+                  key={m}
+                  onPress={() => setPayMode(m)}
+                  style={[styles.segBtn, payMode === m && styles.segBtnActive]}
+                  testID={`sale-pay-${m}`}
+                >
+                  <Ionicons
+                    name={m === "cash" ? "cash-outline" : m === "online" ? "card-outline" : m === "mixed" ? "swap-horizontal-outline" : "business-outline"}
+                    size={14}
+                    color={payMode === m ? "#fff" : theme.color.muted}
+                  />
+                  <Text style={[styles.segText, payMode === m && styles.segTextActive]}>
+                    {m === "cash" ? "Cash" : m === "online" ? "Online" : m === "mixed" ? "Mixed" : "Finance"}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+
+            {payMode === "mixed" ? (
+              <View style={styles.splitRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.miniLabel}>Cash part (₹)</Text>
+                  <TextInput value={cashPart} onChangeText={setCashPart} keyboardType="decimal-pad" placeholder="0" placeholderTextColor={theme.color.muted} style={styles.miniInput} testID="sale-cash" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.miniLabel}>Online part (₹)</Text>
+                  <TextInput value={onlinePart} onChangeText={setOnlinePart} keyboardType="decimal-pad" placeholder="0" placeholderTextColor={theme.color.muted} style={styles.miniInput} testID="sale-online" />
+                </View>
+              </View>
+            ) : null}
+
+            {payMode === "finance" ? (
+              <View style={styles.finBox} testID="sale-finance">
+                <View style={styles.splitRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.miniLabel}>DP — cash (₹)</Text>
+                    <TextInput value={cashPart} onChangeText={setCashPart} keyboardType="decimal-pad" placeholder="0" placeholderTextColor={theme.color.muted} style={styles.miniInput} testID="sale-dp-cash" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.miniLabel}>DP — online (₹)</Text>
+                    <TextInput value={onlinePart} onChangeText={setOnlinePart} keyboardType="decimal-pad" placeholder="0" placeholderTextColor={theme.color.muted} style={styles.miniInput} testID="sale-dp-online" />
+                  </View>
+                </View>
+                <Text style={styles.miniLabel}>DA — finance to bank a/c (₹)</Text>
+                <TextInput value={daAmount} onChangeText={setDaAmount} keyboardType="decimal-pad" placeholder="0" placeholderTextColor={theme.color.muted} style={styles.miniInput} testID="sale-da" />
+                <FinanceHint amountStr={amount} cashStr={cashPart} onlineStr={onlinePart} daStr={daAmount} />
+              </View>
+            ) : null}
+
             <Text style={styles.label}>Sale date (optional — back-date)</Text>
             <TextInput
               value={dateKey}
@@ -546,6 +622,21 @@ export default function PunchSaleModal({ visible, onClose, onSaved, presetCustom
         }}
       />
     </Modal>
+  );
+}
+
+function FinanceHint({ amountStr, cashStr, onlineStr, daStr }: { amountStr: string; cashStr: string; onlineStr: string; daStr: string }) {
+  const bill = parseFloat(amountStr || "0") || 0;
+  const dp = (parseFloat(cashStr || "0") || 0) + (parseFloat(onlineStr || "0") || 0);
+  const da = parseFloat(daStr || "0") || 0;
+  const paid = dp + da;
+  if (paid <= 0) return null;
+  const diff = Math.round((paid - bill) * 100) / 100;
+  return (
+    <Text style={styles.finHint} testID="sale-finance-hint">
+      {`DP ${fmtRcp(dp)} + DA ${fmtRcp(da)} = ${fmtRcp(paid)} vs bill ${fmtRcp(bill)}`}
+      {diff > 0 ? `  ·  Extra finance ${fmtRcp(diff)}` : diff < 0 ? `  ·  Balance ${fmtRcp(-diff)} due` : "  ·  exact"}
+    </Text>
   );
 }
 
@@ -681,6 +772,20 @@ const styles = StyleSheet.create({
   segText: { fontSize: 13, fontWeight: "700", color: theme.color.muted },
   segTextActive: { color: "#fff" },
   hint: { fontSize: 12, color: theme.color.muted, marginTop: 2 },
+  splitRow: { flexDirection: "row", gap: theme.space.sm, marginTop: theme.space.sm },
+  miniLabel: { fontSize: 10, fontWeight: "700", color: theme.color.muted, marginBottom: 3, textTransform: "uppercase", letterSpacing: 0.4 },
+  miniInput: {
+    height: 42, borderRadius: theme.radius.sm, borderWidth: 1, borderColor: theme.color.border,
+    paddingHorizontal: theme.space.sm, color: theme.color.onSurface, fontSize: 14,
+    backgroundColor: theme.color.surface,
+  },
+  finBox: {
+    marginTop: theme.space.sm, padding: 10,
+    borderRadius: theme.radius.md,
+    backgroundColor: "#EFF6FF",
+    borderWidth: 1, borderColor: "#3B82F6" + "44",
+  },
+  finHint: { fontSize: 11, fontWeight: "700", color: "#1D4ED8", marginTop: 8 },
   dupBanner: {
     flexDirection: "row",
     alignItems: "center",

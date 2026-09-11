@@ -24,7 +24,7 @@ const plusDays = (n: number) => {
   return `${d.getFullYear()}-${mm}-${dd}`;
 };
 type SrcType = "sale" | "invoice" | "collection" | "other";
-type Mode = "cash" | "online" | "mixed";
+type Mode = "cash" | "online" | "mixed" | "finance";
 const SOURCES: { key: SrcType; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
   { key: "sale", label: "Sale", icon: "cash-outline" },
   { key: "invoice", label: "Invoice", icon: "document-text-outline" },
@@ -35,6 +35,7 @@ const MODES: { key: Mode; label: string; icon: keyof typeof Ionicons.glyphMap }[
   { key: "cash", label: "Cash", icon: "cash-outline" },
   { key: "online", label: "Online", icon: "card-outline" },
   { key: "mixed", label: "Mixed", icon: "swap-horizontal-outline" },
+  { key: "finance", label: "Finance", icon: "business-outline" },
 ];
 
 export default function ReceiptsScreen() {
@@ -258,6 +259,7 @@ function ReceiptEditor({
   const [mode, setMode] = useState<Mode>("cash");
   const [cashPart, setCashPart] = useState("");
   const [onlinePart, setOnlinePart] = useState("");
+  const [daPart, setDaPart] = useState("");  // finance: DA (bank disbursement)
   const [sourceType, setSourceType] = useState<SrcType>("other");
   const [sourceId, setSourceId] = useState<string | undefined>(undefined);
   const [refNo, setRefNo] = useState("");
@@ -280,8 +282,9 @@ function ReceiptEditor({
       });
       setAmount(String(editing.amount || ""));
       setMode((editing.payment_mode as Mode) || "cash");
-      setCashPart(editing.payment_mode === "mixed" ? String(editing.cash_amount || "") : "");
-      setOnlinePart(editing.payment_mode === "mixed" ? String(editing.online_amount || "") : "");
+      setCashPart(editing.payment_mode === "mixed" || editing.payment_mode === "finance" ? String(editing.cash_amount || "") : "");
+      setOnlinePart(editing.payment_mode === "mixed" || editing.payment_mode === "finance" ? String(editing.online_amount || "") : "");
+      setDaPart(editing.payment_mode === "finance" ? String(editing.da_amount || "") : "");
       setSourceType((editing.source_type as SrcType) || "other");
       setSourceId(editing.source_id || undefined);
       setRefNo(editing.reference_no || "");
@@ -293,7 +296,7 @@ function ReceiptEditor({
     setCustomer({ customer_id: null, name: prefill?.customer || "", mobile: "", address: "" });
     setAmount(prefill?.amount || "");
     setMode("cash");
-    setCashPart(""); setOnlinePart("");
+    setCashPart(""); setOnlinePart(""); setDaPart("");
     setSourceType(prefill?.src_type || "other");
     setSourceId(prefill?.src_id);
     setRefNo("");
@@ -345,7 +348,16 @@ function ReceiptEditor({
     let n = parseFloat(amount);
     let cashN = 0;
     let onlineN = 0;
-    if (mode === "mixed") {
+    let daN = 0;
+    if (mode === "finance") {
+      // FINANCE: DP (cash/online split) + DA (bank); total is computed as DP + DA.
+      cashN = parseFloat(cashPart || "0") || 0;
+      onlineN = parseFloat(onlinePart || "0") || 0;
+      daN = parseFloat(daPart || "0") || 0;
+      if (cashN < 0 || onlineN < 0 || daN < 0) { setErr("DP (cash/online) and DA amounts must be ≥ 0"); return; }
+      if (cashN + onlineN + daN <= 0) { setErr("Finance mode: enter DP (cash/online) and/or DA (bank) amount."); return; }
+      n = Math.round((cashN + onlineN + daN) * 100) / 100;
+    } else if (mode === "mixed") {
       cashN = parseFloat(cashPart || "0") || 0;
       onlineN = parseFloat(onlinePart || "0") || 0;
       if (cashN < 0 || onlineN < 0) { setErr("Cash and online amounts must be ≥ 0"); return; }
@@ -374,8 +386,9 @@ function ReceiptEditor({
         customer_address: customer.address.trim(),
         amount: n,
         payment_mode: mode,
-        cash_amount: mode === "mixed" ? cashN : undefined,
-        online_amount: mode === "mixed" ? onlineN : undefined,
+        cash_amount: mode === "mixed" || mode === "finance" ? cashN : undefined,
+        online_amount: mode === "mixed" || mode === "finance" ? onlineN : undefined,
+        da_amount: mode === "finance" ? daN : undefined,
         source_type: sourceType,
         source_id: sourceId,
         reference_no: refNo.trim() || undefined,
@@ -428,8 +441,16 @@ function ReceiptEditor({
 
             <CustomerPicker value={customer} onChange={setCustomer} testID="rcpt-customer" />
 
-            <Text style={styles.label}>Amount received (₹)</Text>
-            <TextInput value={amount} onChangeText={setAmount} keyboardType="decimal-pad" placeholder="e.g. 5000" placeholderTextColor={theme.color.muted} style={styles.input} testID="rcpt-amount" />
+            <Text style={styles.label}>Amount received (₹){mode === "finance" ? " — auto = DP + DA" : ""}</Text>
+            {mode === "finance" ? (
+              <View style={[styles.input, styles.autoAmt]} testID="rcpt-amount-auto">
+                <Text style={styles.autoAmtText}>
+                  ₹{Math.round(((parseFloat(cashPart || "0") || 0) + (parseFloat(onlinePart || "0") || 0) + (parseFloat(daPart || "0") || 0)) * 100) / 100}
+                </Text>
+              </View>
+            ) : (
+              <TextInput value={amount} onChangeText={setAmount} keyboardType="decimal-pad" placeholder="e.g. 5000" placeholderTextColor={theme.color.muted} style={styles.input} testID="rcpt-amount" />
+            )}
 
             <Text style={styles.label}>Payment mode</Text>
             <View style={styles.segment}>
@@ -485,6 +506,60 @@ function ReceiptEditor({
                   }]}>
                     ₹{Math.round(mixedSum).toLocaleString("en-IN")}
                   </Text>
+                </View>
+              </View>
+            ) : null}
+
+            {mode === "finance" ? (
+              <View style={styles.mixedBox} testID="rcpt-finance">
+                <Text style={styles.mixedTitle}>Finance split — DP (down payment) + DA (bank)</Text>
+                <View style={styles.mixedRow}>
+                  <View style={styles.mixedCol}>
+                    <View style={styles.mixedLabelRow}>
+                      <Ionicons name="cash-outline" size={12} color={theme.color.success} />
+                      <Text style={styles.mixedLabel}>DP · Cash</Text>
+                    </View>
+                    <TextInput
+                      value={cashPart}
+                      onChangeText={setCashPart}
+                      keyboardType="decimal-pad"
+                      placeholder="0"
+                      placeholderTextColor={theme.color.muted}
+                      style={styles.mixedInput}
+                      testID="rcpt-dp-cash"
+                    />
+                  </View>
+                  <Ionicons name="add" size={16} color={theme.color.muted} style={{ marginTop: 24 }} />
+                  <View style={styles.mixedCol}>
+                    <View style={styles.mixedLabelRow}>
+                      <Ionicons name="card-outline" size={12} color={theme.color.brand} />
+                      <Text style={styles.mixedLabel}>DP · Online</Text>
+                    </View>
+                    <TextInput
+                      value={onlinePart}
+                      onChangeText={setOnlinePart}
+                      keyboardType="decimal-pad"
+                      placeholder="0"
+                      placeholderTextColor={theme.color.muted}
+                      style={styles.mixedInput}
+                      testID="rcpt-dp-online"
+                    />
+                  </View>
+                </View>
+                <View style={[styles.mixedCol, { marginTop: 8 }]}>
+                  <View style={styles.mixedLabelRow}>
+                    <Ionicons name="business-outline" size={12} color="#1D4ED8" />
+                    <Text style={styles.mixedLabel}>DA — finance to bank a/c</Text>
+                  </View>
+                  <TextInput
+                    value={daPart}
+                    onChangeText={setDaPart}
+                    keyboardType="decimal-pad"
+                    placeholder="0"
+                    placeholderTextColor={theme.color.muted}
+                    style={styles.mixedInput}
+                    testID="rcpt-da"
+                  />
                 </View>
               </View>
             ) : null}

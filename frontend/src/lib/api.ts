@@ -119,7 +119,13 @@ export type Sale = {
   amount: number;
   cash_amount?: number;
   online_amount?: number;
-  payment_mode?: "cash" | "online" | "mixed";
+  payment_mode?: "cash" | "online" | "mixed" | "finance";
+  /** FINANCE: Disbursement Amount (finance co. → bank a/c) */
+  da_amount?: number | null;
+  /** FINANCE: Down Payment (= cash_amount + online_amount) */
+  dp_amount?: number | null;
+  /** FINANCE: excess of (DP+DA) over the product value */
+  extra_finance?: number | null;
   purchase_amount?: number | null;
   profit?: number;
   currency: string;
@@ -148,11 +154,12 @@ export type LinkedReceipt = {
   id: string;
   receipt_no: string;
   amount: number;
-  payment_mode: "cash" | "online" | "mixed";
+  payment_mode: "cash" | "online" | "mixed" | "finance";
   pdf_token?: string | null;
   customer_name?: string;
   reference_no?: string;
   source_type?: "sale" | "invoice" | "collection" | "other";
+  da_amount?: number;
 };
 
 export type CollectionEntry = {
@@ -163,6 +170,7 @@ export type CollectionEntry = {
   denominations: Record<string, number>;
   cash_total: number;
   online_total: number;
+  da_total?: number;  // bank / finance (DA)
   grand_total: number;
   notes?: string;
   created_at: string;
@@ -189,7 +197,10 @@ export type Invoice = {
   profit?: number;
   cash_amount?: number;
   online_amount?: number;
-  payment_mode?: "cash" | "online" | "mixed";
+  payment_mode?: "cash" | "online" | "mixed" | "finance";
+  da_amount?: number | null;
+  dp_amount?: number | null;
+  extra_finance?: number | null;
   notes: string;
   sale_id?: string | null;
   pdf_path?: string | null;
@@ -212,9 +223,12 @@ export type MoneyReceipt = {
   customer_mobile: string;
   customer_address: string;
   amount: number;
-  payment_mode: "cash" | "online" | "mixed";
+  payment_mode: "cash" | "online" | "mixed" | "finance";
   cash_amount?: number;
   online_amount?: number;
+  da_amount?: number | null;
+  dp_amount?: number | null;
+  extra_finance?: number | null;
   source_type: "sale" | "invoice" | "collection" | "other";
   source_id?: string | null;
   source_label?: string | null;
@@ -285,13 +299,13 @@ export type DaybookPhoto = {
 
 export type DaybookData = {
   date: string;
-  due_collection: { cash: number; online: number; total: number; entries: CollectionEntry[] };
-  daily_sales: { cash: number; online: number; total: number; entries: DailySaleEntry[] };
-  sales: { cash: number; online: number; total: number; entries: Sale[] };
-  receipts: { cash: number; online: number; total: number; entries: MoneyReceipt[] };
-  standalone_receipts: { cash: number; online: number; total: number };
-  invoices: { cash: number; online: number; total: number; entries: Invoice[] };
-  grand_total: { cash: number; online: number; total: number };
+  due_collection: { cash: number; online: number; bank: number; total: number; entries: CollectionEntry[] };
+  daily_sales: { cash: number; online: number; bank?: number; total: number; entries: DailySaleEntry[] };
+  sales: { cash: number; online: number; bank: number; total: number; entries: Sale[] };
+  receipts: { cash: number; online: number; bank: number; total: number; entries: MoneyReceipt[] };
+  standalone_receipts: { cash: number; online: number; bank: number; total: number };
+  invoices: { cash: number; online: number; bank: number; total: number; entries: Invoice[] };
+  grand_total: { cash: number; online: number; bank: number; total: number };
   expected_cash: number;
   cash_verification: {
     id: string; date_key: string; denominations: Record<string, number>; cash_total: number;
@@ -300,7 +314,7 @@ export type DaybookData = {
   photos: DaybookPhoto[];
   total_collection: {
     daily_sales: number; cash_in_hand: number | null; sales: number; invoices: number; due_collection: number;
-    money_receipts: number; standalone_receipts: number; grand_total: number;
+    money_receipts: number; standalone_receipts: number; bank_finance?: number; grand_total: number;
   };
   reconciliation: {
     verified: boolean;
@@ -436,6 +450,7 @@ export const api = {
     patch: {
       amount?: number; product?: string; notes?: string; purchase_amount?: number;
       cash_amount?: number; online_amount?: number; customer_name?: string; date_key?: string;
+      payment_mode?: "cash" | "online" | "mixed" | "finance"; da_amount?: number;
     },
   ) => req<Sale>(`/sales/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
 
@@ -458,6 +473,7 @@ export const api = {
     date_key?: string;
     cash_total?: number;
     online_total?: number;
+    da_total?: number;
     notes?: string;
   }) =>
     req<CollectionEntry>(`/collections`, { method: "POST", body: JSON.stringify(body) }),
@@ -465,13 +481,14 @@ export const api = {
     date_key?: string;
     cash_total?: number;
     online_total?: number;
+    da_total?: number;
     notes?: string;
   }) =>
     req<CollectionEntry>(`/collections/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   deleteCollection: (id: string) =>
     req<{ deleted: boolean }>(`/collections/${id}`, { method: "DELETE" }),
   collectionsSummary: (days = 7) =>
-    req<{ days: { date: string; cash: number; online: number; total: number }[]; totals: { cash: number; online: number; total: number } }>(
+    req<{ days: { date: string; cash: number; online: number; bank: number; total: number }[]; totals: { cash: number; online: number; bank: number; total: number } }>(
       `/collections/summary?days=${days}`,
     ),
 
@@ -553,13 +570,15 @@ export const api = {
     attach_receipt_ids?: string[];
     advance_allocations?: AdvanceAllocationIn[];
     cash_amount?: number; online_amount?: number;
+    da_amount?: number;  // FINANCE mode: bank disbursement; DP = cash+online
     date_key?: string;
   }) => req<Invoice>(`/invoices`, { method: "POST", body: JSON.stringify(body) }),
   getInvoice: (id: string) => req<Invoice>(`/invoices/${id}`),
   replaceInvoice: (id: string, body: {
     customer_name: string; customer_mobile: string; customer_address?: string;
     items: { name: string; qty: number; unit_price: number; unit_cost?: number }[];
-    notes?: string; customer_id?: string; cash_amount?: number; online_amount?: number; date_key?: string;
+    notes?: string; customer_id?: string; cash_amount?: number; online_amount?: number;
+    da_amount?: number; date_key?: string;
   }) =>
     req<Invoice>(`/invoices/${id}`, { method: "PUT", body: JSON.stringify(body) }),
   deleteInvoice: (id: string) => req<{ deleted: boolean }>(`/invoices/${id}`, { method: "DELETE" }),
@@ -580,8 +599,9 @@ export const api = {
     }>(`/receipts/source/${sourceType}/${sourceId}`),
   createReceipt: (body: {
     customer_name: string; customer_mobile?: string; customer_address?: string;
-    amount: number; payment_mode: "cash" | "online" | "mixed";
+    amount: number; payment_mode: "cash" | "online" | "mixed" | "finance";
     cash_amount?: number; online_amount?: number;
+    da_amount?: number;  // FINANCE mode: bank disbursement; total = DP (cash+online) + DA
     source_type: "sale" | "invoice" | "collection" | "other";
     source_id?: string;
     reference_no?: string;
@@ -604,6 +624,7 @@ export const api = {
   replaceReceipt: (id: string, body: {
     customer_id?: string; customer_name: string; customer_mobile: string; customer_address?: string;
     amount: number; payment_mode: string; cash_amount?: number; online_amount?: number;
+    da_amount?: number;
     source_type: string; source_id?: string; reference_no?: string; narration?: string; notes?: string; date_key?: string;
   }) =>
     req<MoneyReceipt>(`/receipts/${id}`, { method: "PUT", body: JSON.stringify(body) }),
@@ -696,6 +717,10 @@ export const api = {
     attach_receipt_ids?: string[];
     advance_allocations?: AdvanceAllocationIn[];
     date_key?: string;
+    payment_mode?: "cash" | "online" | "mixed" | "finance";
+    cash_amount?: number;  // mixed: cash part; finance: DP cash part
+    online_amount?: number;  // mixed: online part; finance: DP online part
+    da_amount?: number;  // FINANCE: bank disbursement; DP = cash+online
   }) =>
     req<Sale>(`/sales`, { method: "POST", body: JSON.stringify(payload) }),
   deleteSale: (id: string) => req<{ deleted: boolean }>(`/sales/${id}`, { method: "DELETE" }),
