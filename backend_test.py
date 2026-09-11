@@ -8,7 +8,7 @@ import sys
 import json
 from datetime import datetime, timedelta
 
-BASE_URL = "https://f88dd101-329c-4578-96fc-edb74cff4162.preview.emergentagent.com/api"
+BASE_URL = "https://open-access-100.preview.emergentagent.com/api"
 
 # Test credentials
 ADMIN_USER = "admin"
